@@ -8,6 +8,8 @@ let package = Package(
         .executable(name: "cosmokit", targets: ["cosmokit"])
     ],
     targets: [
-        .executableTarget(name: "cosmokit", path: "Sources/cosmokit")
+        .target(name: "CosmoKitCLI", path: "Sources/CosmoKitCLI"),
+        .executableTarget(name: "cosmokit", dependencies: ["CosmoKitCLI"], path: "Sources/cosmokit"),
+        .testTarget(name: "CosmoKitCLITests", dependencies: ["CosmoKitCLI"], path: "Tests/CosmoKitCLITests"),
     ]
 )
