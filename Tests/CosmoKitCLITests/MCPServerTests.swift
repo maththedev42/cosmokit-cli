@@ -1,4 +1,5 @@
 import XCTest
+import SystemConfiguration
 @testable import CosmoKitCLI
 
 final class MCPServerTests: XCTestCase {
@@ -7,25 +8,27 @@ final class MCPServerTests: XCTestCase {
         "record_video", "set_location", "open_url", "erase_simulator", "list_apps",
         "install_app", "uninstall_app", "launch_app", "terminate_app", "app_container",
         "set_appearance", "set_status_bar", "clear_status_bar", "set_permission",
-        "set_biometric_enrollment", "match_biometric"
+        "set_biometric_enrollment", "match_biometric", "install_certificate", "reset_keychain"
         ,"send_push", "list_location_scenarios", "run_location_scenario", "clear_location",
         "add_media", "get_pasteboard", "set_pasteboard", "read_defaults", "write_default",
-        "delete_default", "get_logs", "list_runtimes"
+        "delete_default", "get_logs", "list_runtimes", "proxy_status"
     ]
     private let orderedToolNames = [
         "list_simulators", "list_runtimes",
         "boot_simulator", "shutdown_simulator", "erase_simulator",
         "list_apps", "install_app", "uninstall_app", "launch_app", "terminate_app", "app_container",
         "capture_screenshot", "record_video",
-        "set_appearance", "set_status_bar", "clear_status_bar", "set_permission", "set_biometric_enrollment", "match_biometric",
+        "set_appearance", "set_status_bar", "clear_status_bar", "set_permission", "set_biometric_enrollment", "match_biometric", "install_certificate", "reset_keychain",
         "open_url", "send_push", "add_media", "get_pasteboard", "set_pasteboard",
         "set_location", "list_location_scenarios", "run_location_scenario", "clear_location",
-        "read_defaults", "write_default", "delete_default", "get_logs"
+        "read_defaults", "write_default", "delete_default", "get_logs", "proxy_status"
     ]
 
     override func tearDown() {
         MCPServer.execute = { try CLI.perform(command: $0, args: $1, output: $2) }
         CLI.runSimctlForTesting = { try Simctl.run($0) }
+        CLI.runSimctlTimedForTesting = { try Simctl.run($0, timeout: $1) }
+        CLI.proxySourceForTesting = { SCDynamicStoreCopyProxies(nil) as? [String: Any] }
         CLI.resolveDeviceForTesting = { try Simctl.resolveDevice($0) }
         super.tearDown()
     }
@@ -286,8 +289,108 @@ final class MCPServerTests: XCTestCase {
         XCTAssertEqual(result.byteCount, 10)
     }
 
+    func testPushTargetResolutionMatchesAcrossCliAndMCP() throws {
+        let payload = #"{"aps":{},"Simulator Target Bundle":"com.b"}"#
+        let cli = try CLI.parsePush(["com.a", "--payload", payload])
+        let validated = try CLI.validatePushPayload(cli.data, bundleID: cli.bundleID)
+        let invocation = try MCPServer.commandInvocation(tool: "send_push", arguments: ["payload": payload, "bundle_id": "com.a"])
+        XCTAssertEqual(cli.targetBundle, "com.a")
+        XCTAssertEqual(validated.bundle, "com.a")
+        XCTAssertEqual(invocation.args.first, "com.a")
+    }
+
+    func testPushTargetResolutionUsesPayloadOrExplicitBundle() throws {
+        let payloadTarget = try CLI.validatePushPayload(Data(#"{"aps":{},"Simulator Target Bundle":"com.b"}"#.utf8), bundleID: nil)
+        let explicitTarget = try CLI.validatePushPayload(Data(#"{"aps":{}}"#.utf8), bundleID: "com.a")
+        XCTAssertEqual(payloadTarget.bundle, "com.b")
+        XCTAssertEqual(explicitTarget.bundle, "com.a")
+        XCTAssertThrowsError(try CLI.validatePushPayload(Data(#"{"aps":{}}"#.utf8), bundleID: nil)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("bundle id is required unless payload contains Simulator Target Bundle"))
+        }
+    }
+
+    func testReadmeUsesCurrentDeviceDescription() throws {
+        let readme = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("README.md")
+        let text = try String(contentsOf: readme, encoding: .utf8)
+        XCTAssertTrue(text.contains("UDID or name; omit for the booted simulator"))
+        XCTAssertFalse(text.contains("UDID, exact name, or partial name; omit to use the booted simulator"))
+    }
+
     func testScenarioParserRemovesDuplicateRowsAndSorts() {
         XCTAssertEqual(CLI.parseScenarios("Name                 Description\nApple                Apple\nApple                Apple\n"), ["Apple"])
+    }
+
+    func testKeychainStagesContainerPathAndCleansUp() throws {
+        let device = Device(udid: "U", name: "iPhone", state: "Booted", isAvailable: true)
+        CLI.resolveDeviceForTesting = { _ in device }
+        let source = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Containers/test-cosmokit-(UUID().uuidString)/ca.pem")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("certificate".utf8).write(to: source)
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        var received: [String] = []
+        CLI.runSimctlTimedForTesting = { args, _ in received = args; XCTAssertNotEqual(args.last, source.path); XCTAssertTrue(FileManager.default.fileExists(atPath: args.last!)); return "" }
+        _ = try CLI.perform(command: "keychain", args: [source.path], output: nil)
+        XCTAssertEqual(Array(received.prefix(3)), ["keychain", "U", "add-root-cert"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: received.last!))
+    }
+
+    func testKeychainMissingFileDoesNotInvokeSimctl() throws {
+        CLI.resolveDeviceForTesting = { _ in Device(udid: "U", name: "iPhone", state: "Booted", isAvailable: true) }
+        var invoked = false
+        CLI.runSimctlTimedForTesting = { _, _ in invoked = true; return "" }
+        XCTAssertThrowsError(try CLI.perform(command: "keychain", args: ["/tmp/does-not-exist.pem"], output: nil))
+        XCTAssertFalse(invoked)
+    }
+
+    func testKeychainNormalPathAndFailureCleanup() throws {
+        let device = Device(udid: "U", name: "iPhone", state: "Booted", isAvailable: true)
+        CLI.resolveDeviceForTesting = { _ in device }
+        let normal = FileManager.default.temporaryDirectory.appendingPathComponent("cosmokit-ca-(UUID().uuidString).pem")
+        try Data("certificate".utf8).write(to: normal)
+        defer { try? FileManager.default.removeItem(at: normal) }
+        var normalArgs: [String] = []
+        CLI.runSimctlTimedForTesting = { args, _ in normalArgs = args; return "" }
+        _ = try CLI.perform(command: "keychain", args: [normal.path, "--untrusted"], output: nil)
+        XCTAssertEqual(normalArgs.last, normal.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: normal.path))
+        let source = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Containers/test-cosmokit-(UUID().uuidString)/ca.pem")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("certificate".utf8).write(to: source)
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        var stagedPath = ""
+        CLI.runSimctlTimedForTesting = { args, _ in stagedPath = args.last!; throw SimctlError(kind: .commandFailed, message: "failed") }
+        XCTAssertThrowsError(try CLI.perform(command: "keychain", args: [source.path], output: nil))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stagedPath))
+    }
+
+    func testKeychainAndProxyMCPMappings() throws {
+        var calls: [(String, [String])] = []
+        MCPServer.execute = { command, args, _ in calls.append((command, args)); return CommandOutcome(human: "ok", json: EmptyPayload()) }
+        _ = try object(for: #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install_certificate","arguments":{"path":"/tmp/ca.pem","untrusted":true,"device":"U"}}}"#)
+        _ = try object(for: #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reset_keychain","arguments":{}}}"#)
+        _ = try object(for: #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"proxy_status","arguments":{}}}"#)
+        XCTAssertEqual(calls.map { $0.0 }, ["keychain", "keychain-reset", "proxy-status"])
+    }
+
+    func testProxyStatusReadsSystemConfigurationShape() throws {
+        let disabled: [String: Any] = ["HTTPEnable": 0, "HTTPSEnable": 0]
+        let enabled: [String: Any] = ["HTTPEnable": 1, "HTTPProxy": "proxy.local", "HTTPPort": 8080, "HTTPSEnable": 1, "HTTPSProxy": "secure.local", "HTTPSPort": 8443, "ExceptionsList": ["localhost", "*.local"], "__SCOPED__": ["ignored": ["HTTPEnable": 1]]]
+        XCTAssertFalse(CLI.parseProxyStatus(disabled).httpEnabled)
+        let status = CLI.parseProxyStatus(enabled)
+        XCTAssertEqual(status.httpsHost, "secure.local")
+        XCTAssertEqual(status.httpsPort, 8443)
+        XCTAssertEqual(status.bypassList, ["localhost", "*.local"])
+        XCTAssertFalse(CLI.parseProxyStatus(nil).httpsEnabled)
+        XCTAssertTrue(CLI.proxyHumanText(status).contains("HTTPS on at secure.local:8443"))
+        XCTAssertTrue(CLI.proxyHumanText(status).contains("2 bypass rules"))
+    }
+
+    func testRealProxySourceContainsSystemConfigurationKeys() throws {
+        let source = SCDynamicStoreCopyProxies(nil) as? [String: Any]
+        XCTAssertNotNil(source)
+        XCTAssertNotNil(source?["HTTPEnable"])
     }
 
     func testOversizedPushReportsPayloadSize() throws {
@@ -361,7 +464,7 @@ final class MCPServerTests: XCTestCase {
         let response = try object(for: #"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
         let result = response["result"] as! [String: Any]
         let tools = result["tools"] as! [[String: Any]]
-        XCTAssertEqual(tools.count, 32)
+        XCTAssertEqual(tools.count, 35)
         XCTAssertEqual(tools.compactMap { $0["name"] as? String }, orderedToolNames)
         XCTAssertEqual(Set(tools.compactMap { $0["name"] as? String }), toolNames)
         for tool in tools {
@@ -383,6 +486,16 @@ final class MCPServerTests: XCTestCase {
         XCTAssertEqual(capture["required"] as? [String], [])
         let location = try tool(named: "set_location", in: tools)
         XCTAssertEqual(Set(location["required"] as? [String] ?? []), ["latitude", "longitude"])
+    }
+
+    func testToolsListStaysWithinItsContextBudget() throws {
+        // The current response measured 13,307 bytes; 14,000 leaves about 5% for wording edits while making an unreviewed tool addition fail.
+        let response = try XCTUnwrap(MCPServer.handle(line: #"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#))
+        let data = Data(response.utf8)
+        let object = try jsonObject(response)
+        let tools = (object["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+        XCTAssertEqual(tools?.count, 35)
+        XCTAssertLessThan(data.count, 14_000)
     }
 
     func testDefaultsReadResolvesContainerBeforeExport() throws {

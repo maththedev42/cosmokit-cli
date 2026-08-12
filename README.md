@@ -77,6 +77,9 @@ cosmokit defaults <bundle>           Read app UserDefaults
 cosmokit defaults-write <bundle> <key> <value> Write a default
 cosmokit defaults-delete <bundle> <key> Delete a default
 cosmokit logs [--last <duration>]    Read a bounded log window
+cosmokit keychain <path> [name|udid] Install a trusted or untrusted certificate
+cosmokit keychain-reset [name|udid]  Reset the simulator keychain
+cosmokit proxy-status                Read the inherited system proxy
 cosmokit mcp                         Run as an MCP server over stdio
 ```
 
@@ -94,6 +97,8 @@ types are string, bool, int, float, array, and dict. Log windows accept 30s,
 5m, and 1h. Status bar flags are time, dataNetwork, wifiMode, wifiBars,
 cellularMode, cellularBars, operatorName, batteryState, and batteryLevel.
 Pasteboard writes use --set.
+proxy-status names enabled proxy hosts and ports in human output, and counts
+non-empty bypass rules.
 
 ## JSON output
 
@@ -167,6 +172,8 @@ Code or Cursor:
 | `set_permission` | Grant, revoke, or reset simulator privacy permissions. |
 | `set_biometric_enrollment` | Set biometric enrollment on or off. |
 | `match_biometric` | Trigger a biometric match or no-match result. |
+| `install_certificate` | Install a trusted or untrusted certificate into a simulator keychain. |
+| `reset_keychain` | Reset a simulator keychain and undo installed debugging certificates. |
 | `open_url` | Open a URL or deep link. |
 | `send_push` | Send a validated APNs push payload. |
 | `add_media` | Add photo or video files to the simulator library. |
@@ -180,6 +187,7 @@ Code or Cursor:
 | `write_default` | Write an app UserDefaults value. |
 | `delete_default` | Delete an app UserDefaults value. |
 | `get_logs` | Read a bounded, optionally filtered simulator log window. |
+| `proxy_status` | Read the system proxy settings inherited by simulators. |
 
 `record_video` requires `duration` because a tool call has no way to send
 Ctrl-C, so every recording has to stop on a timer.
@@ -215,7 +223,7 @@ The `set_location` tool schema looks like this when pretty-printed:
       },
       "device": {
         "type": "string",
-        "description": "UDID, exact name, or partial name; omit to use the booted simulator"
+        "description": "UDID or name; omit for the booted simulator"
       },
       "latitude": {
         "type": "number",
@@ -227,8 +235,25 @@ The `set_location` tool schema looks like this when pretty-printed:
 }
 ```
 
-The full response lists all thirty-two tools in purpose-based groups. The
+The full response lists all thirty-five tools in purpose-based groups. The
 ordering is for navigation; it has no protocol meaning.
+
+### Context cost
+
+The `tools/list` response is roughly 13 KB, or about 3,300 tokens at four
+bytes per token, loaded once per conversation by an MCP client. That is the
+deliberate price of keeping the full simulator surface in one server; splitting
+it would move complexity into every user's configuration. Reproduce the
+measurement with `printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | .build/release/cosmokit mcp | wc -c` from `cli/`; the 35-tool response measured 13,308 bytes including its newline, and a test keeps it under 14,000 bytes so growth cannot go unnoticed.
+
+### Proxy boundary
+
+The CLI can install the CA a simulator needs and report the system proxy that
+simulators inherit. Capturing traffic and rewriting responses remain in the
+CosmoKit app, where the proxy engine, TLS stack, and privileged helper live.
+The CLI deliberately does not toggle the system proxy live because that changes
+every network service on the Mac and requires root authorization. This boundary
+keeps the free CLI simctl-only while the app owns the privileged proxy workflow.
 
 send_push requires a JSON object containing aps and rejects payloads over 4096
 bytes. Defaults tools address the bundle's preferences by absolute path inside

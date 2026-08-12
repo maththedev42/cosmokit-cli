@@ -8,6 +8,10 @@
 import Foundation
 
 public enum MCPServer {
+    /// Shared across device-bearing schemas so tools/list does not repeat boilerplate.
+    private static let deviceDescription = "UDID or name; omit for the booted simulator"
+    private static let outputDirectoryDescription = "Directory for the timestamped output file"
+
     /// How a tool call reaches the simulator. Tests substitute a stub so the
     /// mapping can be proven without a simulator.
     public static var execute: (_ command: String, _ args: [String], _ output: String?) throws -> CommandOutcome = {
@@ -179,6 +183,16 @@ public enum MCPServer {
             return ("logs", args, nil)
         case "list_runtimes":
             return ("runtimes", [], nil)
+        case "install_certificate":
+            let path = try requiredString(arguments, key: "path")
+            var args = [path]
+            if let device = try optionalString(arguments, key: "device") { args.append(device) }
+            if let untrusted = arguments["untrusted"] as? Bool, untrusted { args.append("--untrusted") }
+            return ("keychain", args, nil)
+        case "reset_keychain":
+            return ("keychain-reset", try optionalString(arguments, key: "device").map { [$0] } ?? [], nil)
+        case "proxy_status":
+            return ("proxy-status", [], nil)
         default:
             throw CLIError(commandError: CommandError(code: .unknownCommand, message: "Unknown tool: \(tool)"))
         }
@@ -392,7 +406,7 @@ public enum MCPServer {
     private static func tools() -> [[String: Any]] {
         let device = [
             "type": "string",
-            "description": "UDID, exact name, or partial name; omit to use the booted simulator"
+            "description": deviceDescription
         ]
         return [
             tool("list_simulators", "List available iOS Simulators, sorted by name. Takes no arguments.", properties: [:], required: []),
@@ -406,14 +420,16 @@ public enum MCPServer {
             tool("launch_app", "Launch an installed app by bundle identifier and return its child PID when simctl reports one; optionally provide a device.", properties: ["bundle_id": ["type": "string", "description": "Installed app bundle identifier"], "device": device], required: ["bundle_id"]),
             tool("terminate_app", "Terminate an installed app by bundle identifier; optionally provide a device, otherwise the booted simulator is used.", properties: ["bundle_id": ["type": "string", "description": "Installed app bundle identifier"], "device": device], required: ["bundle_id"]),
             tool("app_container", "Return the path to an app, data, or shared-app-groups container by bundle identifier; omit kind for the app container and omit device for the booted simulator.", properties: ["bundle_id": ["type": "string", "description": "Installed app bundle identifier"], "kind": ["type": "string", "enum": ["app", "data", "groups"], "description": "Container kind; defaults to app"], "device": device], required: ["bundle_id"]),
-            tool("capture_screenshot", "Capture a PNG screenshot from a simulator; omit device to use the booted simulator and output to use the current directory.", properties: ["device": device, "output": ["type": "string", "description": "Directory where the timestamped PNG should be written"]], required: []),
-            tool("record_video", "Record simulator video for a fixed number of seconds; omit device to use the booted simulator and output to use the current directory.", properties: ["device": device, "output": ["type": "string", "description": "Directory where the timestamped MP4 should be written"], "duration": ["type": "number", "description": "Number of seconds to record"]], required: ["duration"]),
+            tool("capture_screenshot", "Capture a PNG screenshot from a simulator; omit device to use the booted simulator and output to use the current directory.", properties: ["device": device, "output": ["type": "string", "description": outputDirectoryDescription]], required: []),
+            tool("record_video", "Record simulator video for a fixed number of seconds; omit device to use the booted simulator and output to use the current directory.", properties: ["device": device, "output": ["type": "string", "description": outputDirectoryDescription], "duration": ["type": "number", "description": "Number of seconds to record"]], required: ["duration"]),
             tool("set_appearance", "Set or read a simulator's light or dark appearance; omit appearance to read the current value and omit device to use the booted simulator.", properties: ["appearance": ["type": "string", "enum": ["light", "dark"]], "device": device], required: []),
             tool("set_status_bar", "Override simulator status bar values for a screenshot; provide at least one override and omit device to use the booted simulator.", properties: ["time": ["type": "string"], "battery_level": ["type": "number"], "battery_state": ["type": "string"], "wifi_bars": ["type": "number"], "cellular_bars": ["type": "number"], "cellular_mode": ["type": "string"], "data_network": ["type": "string"], "operator_name": ["type": "string"], "device": device], required: []),
             tool("clear_status_bar", "Clear all simulator status bar overrides; omit device to use the booted simulator.", properties: ["device": device], required: []),
             tool("set_permission", "Grant, revoke, or reset a simulator privacy permission; some changes terminate the running app, and omit device to use the booted simulator.", properties: ["action": ["type": "string", "enum": ["grant", "revoke", "reset"]], "service": ["type": "string", "enum": ["all", "calendar", "contacts-limited", "contacts", "location", "location-always", "photos-add", "photos", "media-library", "microphone", "motion", "reminders", "siri"]], "bundle_id": ["type": "string"], "device": device], required: ["action", "service"]),
             tool("set_biometric_enrollment", "Set biometric enrollment on or off; enrollment must be on before a biometric match can affect an app prompt, and omit device to use the booted simulator.", properties: ["enrolled": ["type": "boolean"], "device": device], required: ["enrolled"]),
             tool("match_biometric", "Post a Face ID or Touch ID match result while an app is showing its biometric prompt; enrollment must be on first, and omit device to use the booted simulator.", properties: ["result": ["type": "string", "enum": ["match", "nomatch"]], "device": device], required: []),
+            tool("install_certificate", "Install a certificate into the simulator keychain; add-root-cert makes its CA trusted, so a holder of the private key can read HTTPS traffic. Reset the keychain to undo it.", properties: ["path": ["type": "string", "description": "Certificate file path"], "untrusted": ["type": "boolean", "description": "Use add-cert instead of the trusted root action"], "device": device], required: ["path"]),
+            tool("reset_keychain", "Reset the simulator keychain, undoing installed debugging certificates and restoring its clean trust state.", properties: ["device": device], required: []),
             tool("open_url", "Open a deep link or URL in a simulator; omit device to use the booted simulator.", properties: ["device": device, "url": ["type": "string", "description": "URL or deep link to open"]], required: ["url"]),
             tool("send_push", "Send a validated APNs push payload to an app; payload must be a JSON object with aps and may include Simulator Target Bundle, otherwise provide bundle_id.", properties: ["payload": ["type": "object", "description": "JSON push payload containing aps"], "bundle_id": ["type": "string"], "device": device], required: ["payload"]),
             tool("add_media", "Add one or more photo or video files to a simulator's library; omit device to use the booted simulator.", properties: ["paths": ["type": "array", "items": ["type": "string"]], "device": device], required: ["paths"]),
@@ -426,7 +442,8 @@ public enum MCPServer {
             tool("read_defaults", "Read an app's UserDefaults by resolving its data container path; an empty result means the app has not written defaults yet.", properties: ["bundle_id": ["type": "string"], "device": device], required: ["bundle_id"]),
             tool("write_default", "Write an app UserDefaults value. Restart the app for the changed default to take effect.", properties: ["bundle_id": ["type": "string"], "key": ["type": "string"], "value": ["type": ["string", "number", "boolean", "array", "object"], "description": "String, number, boolean, array, or dictionary"], "type": ["type": "string", "enum": ["string", "bool", "int", "float", "array", "dict"]], "device": device], required: ["bundle_id", "key", "value"]),
             tool("delete_default", "Delete an app UserDefaults value. Restart the app for the change to take effect.", properties: ["bundle_id": ["type": "string"], "key": ["type": "string"], "device": device], required: ["bundle_id", "key"]),
-            tool("get_logs", "Read the last bounded simulator log window, keeping at most the last 500 lines.", properties: ["last": ["type": "string", "description": "30s, 5m, or 1h; defaults to 1m"], "predicate": ["type": "string"], "bundle_id": ["type": "string", "description": "Convenience subsystem predicate when predicate is omitted"], "device": device], required: [])
+            tool("get_logs", "Read the last bounded simulator log window, keeping at most the last 500 lines.", properties: ["last": ["type": "string", "description": "30s, 5m, or 1h; defaults to 1m"], "predicate": ["type": "string"], "bundle_id": ["type": "string", "description": "Convenience subsystem predicate when predicate is omitted"], "device": device], required: []),
+            tool("proxy_status", "Read the system HTTP and HTTPS proxy inherited by simulators, including hosts, ports, and bypass entries; this command never changes settings.", properties: [:], required: [])
         ]
     }
 

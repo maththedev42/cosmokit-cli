@@ -72,6 +72,31 @@ public enum Simctl {
     }
 
     @discardableResult
+    public static func run(_ arguments: [String], timeout: TimeInterval) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl"] + arguments
+        let stdout = Pipe(); let stderr = Pipe()
+        process.standardOutput = stdout; process.standardError = stderr
+        do { try process.run() } catch {
+            throw SimctlError(kind: .launchFailed, message: "could not run xcrun: \(error.localizedDescription)")
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        if process.isRunning {
+            process.terminate()
+            throw SimctlError(kind: .commandFailed, message: "simctl timed out; a consent sheet is probably waiting for a human")
+        }
+        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+        guard process.terminationStatus == 0 else {
+            let message = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown error"
+            throw SimctlError(kind: .commandFailed, message: message)
+        }
+        return String(data: outData, encoding: .utf8) ?? ""
+    }
+
+    @discardableResult
     public static func run(_ arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
