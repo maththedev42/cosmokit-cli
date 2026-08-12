@@ -38,15 +38,46 @@ mv cosmokit /usr/local/bin/
 ## Commands
 
 ```
+DISCOVERY
 cosmokit list                        List available simulators
-cosmokit boot [name|udid]            Boot a simulator (default: first available)
-cosmokit shutdown [name|udid]        Shut a simulator down (default: booted)
+cosmokit runtimes                    List runtimes and device types
+LIFECYCLE
+cosmokit boot [name|udid]            Boot a simulator
+cosmokit shutdown [name|udid]        Shut down a simulator
+cosmokit erase [name|udid]           Erase a simulator
+APPS
+cosmokit apps [name|udid]            List installed apps
+cosmokit install <path> [name|udid]  Install an app bundle
+cosmokit uninstall <bundle> [name|udid] Uninstall an app
+cosmokit launch <bundle> [name|udid] Launch an app
+cosmokit terminate <bundle> [name|udid] Terminate an app
+cosmokit container <bundle> [kind] [name|udid] Get a container path
+CAPTURE
 cosmokit capture [name|udid]         Screenshot to a file
-cosmokit record [name|udid]          Record video until Ctrl-C or --duration
-cosmokit location <lat> <lon> [dev]  Set the simulator's GPS position
+cosmokit record [name|udid]          Record video
+STATE
+cosmokit appearance [light|dark] [name|udid] Set or read appearance
+cosmokit statusbar [flags] [name|udid] Set status bar overrides
+cosmokit statusbar-clear [name|udid] Clear status bar overrides
+cosmokit permission <action> <service> [bundle] [name|udid] Set permission
+cosmokit biometric-enroll <on|off> [name|udid] Set biometric enrollment
+cosmokit biometric-match [match|nomatch] [name|udid] Trigger biometric result
+CONTENT AND INPUT
 cosmokit open <url> [name|udid]      Open a deep link
-cosmokit erase [name|udid]           Erase a simulator back to a fresh install
-cosmokit mcp                         Run as an MCP server over stdio (for AI agents)
+cosmokit push [bundle]               Send a push payload
+cosmokit addmedia <path> [path ...]  Add media to the photo library
+cosmokit pasteboard [--set <text>]   Read or set the pasteboard
+LOCATION
+cosmokit location <lat> <lon> [dev]  Set a fixed GPS position
+cosmokit scenarios [name|udid]       List built-in location scenarios
+cosmokit route <scenario> [name|udid] Run a location scenario
+cosmokit location-clear [name|udid]  Clear a location scenario
+INSPECTION
+cosmokit defaults <bundle>           Read app UserDefaults
+cosmokit defaults-write <bundle> <key> <value> Write a default
+cosmokit defaults-delete <bundle> <key> Delete a default
+cosmokit logs [--last <duration>]    Read a bounded log window
+cosmokit mcp                         Run as an MCP server over stdio
 ```
 
 `--output <path>` sets the directory for `capture` and `record`. Use
@@ -57,6 +88,12 @@ Device arguments accept a UDID, an exact name, or a partial name. Omit them to
 use the booted simulator.
 
 Commands exit non-zero on failure, so they are safe to use under `set -e`.
+
+Push input precedence is --payload, then --payload-file, then stdin. Defaults
+types are string, bool, int, float, array, and dict. Log windows accept 30s,
+5m, and 1h. Status bar flags are time, dataNetwork, wifiMode, wifiBars,
+cellularMode, cellularBars, operatorName, batteryState, and batteryLevel.
+Pasteboard writes use --set.
 
 ## JSON output
 
@@ -112,13 +149,37 @@ Code or Cursor:
 | Tool | Purpose |
 | --- | --- |
 | `list_simulators` | List available simulators sorted by name. |
+| `list_runtimes` | List simulator runtimes and device types without requiring a device. |
 | `boot_simulator` | Boot a selected simulator, or the first available shutdown simulator. |
 | `shutdown_simulator` | Shut down a selected simulator, or the booted simulator. |
+| `erase_simulator` | Erase a selected simulator, or the booted simulator. |
+| `list_apps` | List installed apps and their bundle metadata. |
+| `install_app` | Install an app bundle. |
+| `uninstall_app` | Uninstall an app by bundle identifier. |
+| `launch_app` | Launch an installed app and return its PID when available. |
+| `terminate_app` | Terminate an installed app. |
+| `app_container` | Resolve an app, data, or shared-app-groups container path. |
 | `capture_screenshot` | Capture a PNG screenshot into an optional output directory. |
 | `record_video` | Record a video for a required fixed duration into an optional output directory. |
+| `set_appearance` | Set or read light/dark appearance. |
+| `set_status_bar` | Override status bar values for screenshots. |
+| `clear_status_bar` | Clear status bar overrides. |
+| `set_permission` | Grant, revoke, or reset simulator privacy permissions. |
+| `set_biometric_enrollment` | Set biometric enrollment on or off. |
+| `match_biometric` | Trigger a biometric match or no-match result. |
+| `open_url` | Open a URL or deep link. |
+| `send_push` | Send a validated APNs push payload. |
+| `add_media` | Add photo or video files to the simulator library. |
+| `get_pasteboard` | Read simulator pasteboard text. |
+| `set_pasteboard` | Replace simulator pasteboard text. |
 | `set_location` | Set latitude and longitude on a simulator. |
-| `open_url` | Open a URL or deep link in a simulator. |
-| `erase_simulator` | Erase a selected simulator, or the booted simulator. |
+| `list_location_scenarios` | List built-in simulated location scenarios. |
+| `run_location_scenario` | Run a moving location scenario until cleared. |
+| `clear_location` | Stop a location scenario and clear the fixed location. |
+| `read_defaults` | Read app UserDefaults by container path. |
+| `write_default` | Write an app UserDefaults value. |
+| `delete_default` | Delete an app UserDefaults value. |
+| `get_logs` | Read a bounded, optionally filtered simulator log window. |
 
 `record_video` requires `duration` because a tool call has no way to send
 Ctrl-C, so every recording has to stop on a timer.
@@ -166,7 +227,14 @@ The `set_location` tool schema looks like this when pretty-printed:
 }
 ```
 
-The full response lists all eight tools.
+The full response lists all thirty-two tools in purpose-based groups. The
+ordering is for navigation; it has no protocol meaning.
+
+send_push requires a JSON object containing aps and rejects payloads over 4096
+bytes. Defaults tools address the bundle's preferences by absolute path inside
+its data container because an unqualified bundle domain silently reads the
+wrong store and returns nothing. run_location_scenario keeps running until
+clear_location is called; it is not the one-shot equivalent of set_location.
 
 ## Examples
 

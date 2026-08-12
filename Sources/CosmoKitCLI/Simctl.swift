@@ -46,6 +46,32 @@ public struct Device: Decodable {
 public enum Simctl {
 
     @discardableResult
+    public static func run(_ arguments: [String], input: Data?) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl"] + arguments
+        let stdout = Pipe()
+        let stderr = Pipe()
+        let stdin = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        process.standardInput = stdin
+        do { try process.run() } catch {
+            throw SimctlError(kind: .launchFailed, message: "could not run xcrun: \(error.localizedDescription)")
+        }
+        if let input { stdin.fileHandleForWriting.write(input) }
+        stdin.fileHandleForWriting.closeFile()
+        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown error"
+            throw SimctlError(kind: .commandFailed, message: message)
+        }
+        return String(data: outData, encoding: .utf8) ?? ""
+    }
+
+    @discardableResult
     public static func run(_ arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
