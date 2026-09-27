@@ -32,8 +32,8 @@ final class OutputTests: XCTestCase {
     }
 
     func testSuccessEnvelopeFlattensPayload() throws {
-        let data = try encode(Envelope(ok: true, payload: VersionPayload(version: "0.1.0")))
-        XCTAssertEqual(String(decoding: data, as: UTF8.self), "{\"ok\":true,\"version\":\"0.1.0\"}")
+        let data = try encode(Envelope(ok: true, payload: VersionPayload(version: "0.2.0")))
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "{\"ok\":true,\"version\":\"0.2.0\"}")
     }
 
     func testFailureEnvelopeUsesStableErrorCode() throws {
@@ -46,7 +46,7 @@ final class OutputTests: XCTestCase {
     }
 
     func testEveryErrorCodeRoundTrips() throws {
-        for code in [ErrorCode.usage, .deviceNotFound, .noSimulator, .simctlFailed, .unknownCommand] {
+        for code in [ErrorCode.usage, .deviceNotFound, .noSimulator, .simctlFailed, .unknownCommand, .driverUnavailable, .refStale, .refNotFound, .unsupported, .timeout] {
             let data = try JSONEncoder().encode(code)
             XCTAssertEqual(try JSONDecoder().decode(ErrorCode.self, from: data), code)
         }

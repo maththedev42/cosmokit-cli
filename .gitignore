@@ -1,4 +1,4 @@
+.driver-derived/
+dist/
 .build/
-.swiftpm/
 .DS_Store
-*.dSYM

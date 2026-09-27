@@ -1,0 +1,35 @@
+name: CosmoKitAgentDriver
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  bundleIdPrefix: apps.mjkweber
+settings:
+  base:
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+targets:
+  AgentHost:
+    type: application
+    platform: iOS
+    sources: AgentHost
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: apps.mjkweber.CosmoKitAgentHost
+      GENERATE_INFOPLIST_FILE: YES
+  AgentDriver:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: AgentDriver
+    dependencies:
+      - target: AgentHost
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: apps.mjkweber.CosmoKitAgentDriver
+      GENERATE_INFOPLIST_FILE: YES
+schemes:
+  AgentDriver:
+    build:
+      targets:
+        AgentHost: all
+        AgentDriver: all
+    test:
+      targets:
+        - AgentDriver

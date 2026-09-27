@@ -10,6 +10,6 @@ let package = Package(
     targets: [
         .target(name: "CosmoKitCLI", path: "Sources/CosmoKitCLI"),
         .executableTarget(name: "cosmokit", dependencies: ["CosmoKitCLI"], path: "Sources/cosmokit"),
-        .testTarget(name: "CosmoKitCLITests", dependencies: ["CosmoKitCLI"], path: "Tests/CosmoKitCLITests"),
+        .testTarget(name: "CosmoKitCLITests", dependencies: ["CosmoKitCLI"], path: "Tests/CosmoKitCLITests", exclude: ["Fixtures"]),
     ]
 )

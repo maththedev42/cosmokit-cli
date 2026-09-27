@@ -16,15 +16,185 @@ public enum ErrorCode: String, Codable {
     case noSimulator
     case simctlFailed
     case unknownCommand
+    case driverUnavailable
+    case refStale
+    case refNotFound
+    case unsupported
+    case timeout
+    case screenChanged
+    case appNotRunning
+    case appTooOld
+    case proxyNotRunning
 }
 
-public struct CommandError: Codable {
+public struct FeedbackElementPayload: Codable, Equatable {
+    public let ref: Int
+    public let type: String
+    public let label: String?
+    public let identifier: String?
+    public let frame: UITreeFrame?
+    public init(ref: Int, type: String, label: String? = nil, identifier: String? = nil, frame: UITreeFrame? = nil) {
+        self.ref = ref; self.type = type; self.label = label; self.identifier = identifier; self.frame = frame
+    }
+}
+
+public struct FeedbackRecordPayload: Codable, Equatable {
+    public let seq: Int
+    public let at: String
+    public let x: Double
+    public let y: Double
+    public let element: FeedbackElementPayload
+    public let text: String
+    public let frame: String
+    public let branch: String?
+    public let worktree: String?
+    public let app: String?
+    public let udid: String
+    public var acked: Bool?
+    public init(seq: Int, at: String, x: Double, y: Double, element: FeedbackElementPayload, text: String, frame: String, branch: String? = nil, worktree: String? = nil, app: String? = nil, udid: String, acked: Bool? = false) {
+        self.seq = seq; self.at = at; self.x = x; self.y = y; self.element = element; self.text = text; self.frame = frame; self.branch = branch; self.worktree = worktree; self.app = app; self.udid = udid; self.acked = acked
+    }
+}
+
+public struct StreamStatusPayload: Codable, Equatable {
+    public let running: Bool
+    public let port: Int?
+    public let pid: Int?
+    public let url: String?
+    public init(running: Bool, port: Int? = nil, pid: Int? = nil, url: String? = nil) {
+        self.running = running; self.port = port; self.pid = pid; self.url = url
+    }
+}
+
+public struct FeedbackListPayload: Codable, Equatable {
+    public let records: [FeedbackRecordPayload]
+    public init(records: [FeedbackRecordPayload]) { self.records = records }
+}
+
+public struct FeedbackClearPayload: Codable, Equatable {
+    public let cleared: Bool
+    public let count: Int
+    public init(cleared: Bool, count: Int) { self.cleared = cleared; self.count = count }
+}
+
+public struct FeedbackPromptPayload: Codable, Equatable {
+    public let text: String
+    public init(text: String) { self.text = text }
+}
+
+public struct DriverStatusPayload: Codable {
+    public let running: Bool
+    public let port: Int?
+    public let pid: Int?
+    public let app: String?
+    public init(running: Bool, port: Int? = nil, pid: Int? = nil, app: String? = nil) {
+        self.running = running; self.port = port; self.pid = pid; self.app = app
+    }
+}
+
+public struct DriverActionPayload: Codable {
+    public let ok: Bool
+    public let message: String
+    public init(ok: Bool = true, message: String) { self.ok = ok; self.message = message }
+}
+
+public struct UIScreenshotPayload: Codable {
+    public let path: String
+    public let width: Int
+    public let height: Int
+    public let bytes: Int
+    public init(path: String, width: Int, height: Int, bytes: Int) { self.path = path; self.width = width; self.height = height; self.bytes = bytes }
+}
+
+public struct CommandError: Codable, Equatable {
     public let code: ErrorCode
     public let message: String
+    public let expected: String?
+    public let actual: String?
+    public let hint: String?
 
-    public init(code: ErrorCode, message: String) {
+    public init(code: ErrorCode, message: String, expected: String? = nil, actual: String? = nil, hint: String? = nil) {
         self.code = code
         self.message = message
+        self.expected = expected
+        self.actual = actual
+        self.hint = hint
+    }
+}
+
+public struct NetworkProxyInfoPayload: Codable, Equatable {
+    public let running: Bool
+    public let port: Int
+    public init(running: Bool, port: Int) {
+        self.running = running
+        self.port = port
+    }
+}
+
+public struct NetworkConditionsPayload: Codable, Equatable {
+    public let preset: String?
+    public let latencyMs: Int?
+    public let downloadKbps: Int?
+    public let uploadKbps: Int?
+    public let failureRatePercent: Int?
+    public let failureMode: String?
+    public let timeoutSeconds: Int?
+    public init(
+        preset: String? = nil,
+        latencyMs: Int? = nil,
+        downloadKbps: Int? = nil,
+        uploadKbps: Int? = nil,
+        failureRatePercent: Int? = nil,
+        failureMode: String? = nil,
+        timeoutSeconds: Int? = nil
+    ) {
+        self.preset = preset
+        self.latencyMs = latencyMs
+        self.downloadKbps = downloadKbps
+        self.uploadKbps = uploadKbps
+        self.failureRatePercent = failureRatePercent
+        self.failureMode = failureMode
+        self.timeoutSeconds = timeoutSeconds
+    }
+}
+
+public struct NetworkStatusPayload: Codable, Equatable {
+    public let proxy: NetworkProxyInfoPayload
+    public let conditions: NetworkConditionsPayload
+    public let offline: Bool
+    public init(proxy: NetworkProxyInfoPayload, conditions: NetworkConditionsPayload, offline: Bool) {
+        self.proxy = proxy
+        self.conditions = conditions
+        self.offline = offline
+    }
+}
+
+public struct WaitPayload: Codable, Equatable {
+    public let screen: String
+    public let ref: Int?
+    public let element: FeedbackElementPayload?
+    public let gone: Bool
+    public init(screen: String, ref: Int? = nil, element: FeedbackElementPayload? = nil, gone: Bool = false) {
+        self.screen = screen; self.ref = ref; self.element = element; self.gone = gone
+    }
+}
+
+public struct DoPayload: Codable, Equatable {
+    public let screen: String
+    public let stepsCompleted: Int
+    public let totalSteps: Int
+    public let app: String?
+    public init(screen: String, stepsCompleted: Int, totalSteps: Int, app: String? = nil) {
+        self.screen = screen; self.stepsCompleted = stepsCompleted; self.totalSteps = totalSteps; self.app = app
+    }
+}
+
+public struct DoFailurePayload: Codable, Equatable {
+    public let failedStep: Int
+    public let totalSteps: Int
+    public let error: CommandError
+    public init(failedStep: Int, totalSteps: Int, error: CommandError) {
+        self.failedStep = failedStep; self.totalSteps = totalSteps; self.error = error
     }
 }
 

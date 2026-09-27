@@ -1,4 +1,5 @@
 {
+  "_comment_channel_example": "For Claude Code push delivery, start with: claude --dangerously-load-development-channels server:cosmokit",
   "mcpServers": {
     "cosmokit": {
       "command": "cosmokit",

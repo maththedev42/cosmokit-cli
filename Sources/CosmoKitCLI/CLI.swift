@@ -10,6 +10,7 @@
 
 import Foundation
 import SystemConfiguration
+import Darwin
 
 /// What a command produced. `human` is the exact line the CLI has always
 /// printed; `json` is the same result as an encodable payload.
@@ -38,7 +39,7 @@ public struct CLIError: LocalizedError {
 }
 
 public enum CLI {
-    public static let version = "0.1.0"
+    public static let version = "0.4.0"
     public static var runSimctlForTesting: (_ arguments: [String]) throws -> String = { try Simctl.run($0) }
     public static var runSimctlTimedForTesting: (_ arguments: [String], _ timeout: TimeInterval) throws -> String = { try Simctl.run($0, timeout: $1) }
     public static var proxySourceForTesting: () -> [String: Any]? = { SCDynamicStoreCopyProxies(nil) as? [String: Any] }
@@ -94,6 +95,14 @@ public enum CLI {
           keychain <path> [name|udid] Add-root-cert trusts a CA for HTTPS debugging
           keychain-reset [name|udid]  Reset the simulator keychain
           proxy-status                Read the system proxy inherited by simulators
+          agent start|stop|status     Start, stop, or inspect the UI driver
+          agent stream [options]      Stream simulator to browser for feedback
+          feedback next|list|ack|clear|prompt Read and manage human stream comments
+          ui tree|tap|press|swipe     Inspect and drive the app UI
+          ui type|button|alert        Type text or press UI/hardware controls
+          ui wait|do                  Wait for elements or run action sequences
+          ui screenshot|find          Capture or search the UI
+          doctor                      Check local simulator and driver setup
           mcp                         Run as an MCP server over stdio (for AI agents)
           help                        Show this message
 
@@ -205,11 +214,11 @@ public enum CLI {
         }
     }
 
-    public static func perform(command: String, args: [String], output: String?) throws -> CommandOutcome {
-        try perform(command: command, args: args, output: output, duration: nil)
+    public static func perform(command: String, args: [String], output: String? = nil, duration: Double? = nil) throws -> CommandOutcome {
+        try performInternal(command: command, args: args, output: output, duration: duration)
     }
 
-    public static func perform(command: String, args: [String], output: String?, duration: Double?) throws -> CommandOutcome {
+    private static func performInternal(command: String, args: [String], output: String?, duration: Double?) throws -> CommandOutcome {
         switch command {
         case "help", "--help", "-h":
             return CommandOutcome(human: usageText(), json: EmptyPayload())
@@ -310,6 +319,10 @@ public enum CLI {
             let device = try resolveDevice(args.count > 1 ? args[1] : nil)
             let simctlOutput = try runSimctl(["launch", device.udid, bundleID])
             let pid = simctlOutput.split(whereSeparator: { $0 == ":" || $0 == " " || $0 == "\n" }).compactMap { Int($0) }.first
+            Driver.saveTargetApp(bundleID, for: device.udid)
+            if Driver.status(device: device.udid).running {
+                _ = try? Driver.call("/app?bundleId=\(bundleID)", method: "POST", json: ["bundleId": bundleID])
+            }
             return CommandOutcome(human: simctlOutput.trimmingCharacters(in: .whitespacesAndNewlines), json: LaunchPayload(udid: device.udid, name: device.name, bundleID: bundleID, pid: pid))
 
         case "terminate":
@@ -490,8 +503,539 @@ public enum CLI {
             let payload = parseProxyStatus(proxySourceForTesting())
             return CommandOutcome(human: proxyHumanText(payload), json: payload)
 
+        case "throttle":
+            return try performThrottle(args)
+
+        case "offline":
+            return try performOffline(args)
+
+        case "agent":
+            guard let action = args.first else { throw usage("usage: cosmokit agent start|stop|status|stream [name|udid] [--port N]") }
+            if action == "stream" {
+                return try performAgentStream(Array(args.dropFirst()))
+            }
+            guard ["start", "stop", "status"].contains(action) else { throw usage("usage: cosmokit agent start|stop|status|stream [name|udid] [--port N]") }
+            let device = args.dropFirst().first(where: { !$0.hasPrefix("--") })
+            if action == "status" { return CommandOutcome(human: Driver.status(device: device).running ? "Driver running" : "Driver stopped", json: Driver.status(device: device)) }
+            if action == "stop" { let result = try Driver.stop(device: device); return CommandOutcome(human: result.message, json: result) }
+            var port = 8877; if let index = args.firstIndex(of: "--port"), index + 1 < args.count, let value = Int(args[index + 1]) { port = value }
+            let result = try Driver.start(device: device, port: port); return CommandOutcome(human: "Driver running on port \(result.port ?? port)", json: result)
+
+        case "feedback":
+            return try performFeedback(args)
+
+        case "ui":
+            return try performUI(args)
+
+        case "doctor":
+            let result = Doctor.run(); return CommandOutcome(human: result.lines.joined(separator: "\n"), json: result)
+
         default:
             throw CLIError(commandError: CommandError(code: .unknownCommand, message: "Unknown command: \(command)"))
+        }
+    }
+
+    private static func performUI(_ args: [String]) throws -> CommandOutcome {
+        guard let action = args.first else { throw usage("usage: cosmokit ui tree|tap|press|swipe|type|button|alert|screenshot|find|wait|do") }
+        switch action {
+        case "tree":
+            var mode = UITreeMode.act; var depth: String?; var max = 80; var app: String?; var index = 1
+            while index < args.count { switch args[index] { case "--mode": guard index + 1 < args.count, let value = UITreeMode(rawValue: args[index + 1]) else { throw usage("mode must be nav, act, or debug") }; mode = value; index += 2; case "--depth": guard index + 1 < args.count else { throw usage("--depth requires a value") }; depth = args[index + 1]; index += 2; case "--max": guard index + 1 < args.count, let value = Int(args[index + 1]), value > 0 else { throw usage("--max requires a positive integer") }; max = value; index += 2; case "--app": guard index + 1 < args.count else { throw usage("--app requires a bundle id") }; app = args[index + 1]; index += 2; default: index += 1 } }
+            var query: [String: Any] = [:]; if let depth { query["depth"] = Int(depth) ?? depth }; if let app { query["app"] = app }
+            let data = try Driver.call("/tree", method: "GET", json: query.isEmpty ? nil : query)
+            var snapshot = try UITree.parse(data)
+            let hash = UITree.screenHash(snapshot)
+            snapshot.screen = hash
+            return CommandOutcome(human: UITree.compact(snapshot, mode: mode, maxLines: max), json: snapshot)
+        case "find":
+            var searchApp: String?
+            var findArgs: [String] = []
+            var fi = 1
+            while fi < args.count {
+                if args[fi] == "--app" && fi + 1 < args.count {
+                    searchApp = args[fi + 1]
+                    fi += 2
+                } else {
+                    findArgs.append(args[fi])
+                    fi += 1
+                }
+            }
+            guard !findArgs.isEmpty else { throw usage("ui find requires text") }
+            var findQuery: [String: Any] = [:]
+            if let searchApp { findQuery["app"] = searchApp }
+            let snapshot = try UITree.parse(Driver.call("/tree", method: "GET", json: findQuery.isEmpty ? nil : findQuery))
+            let matches = UITree.find(snapshot, text: findArgs.joined(separator: " "))
+            return CommandOutcome(human: matches.map { "[\($0.ref)] \($0.type) \($0.label ?? $0.value ?? "")" }.joined(separator: "\n"), json: matches)
+        case "tap":
+            guard args.count > 1 else { throw usage("ui tap requires a ref or x,y") }; return try uiAction("/tap", args: Array(args.dropFirst()))
+        case "press":
+            guard args.count > 1 else { throw usage("ui press requires a ref") }; return try uiAction("/press", args: Array(args.dropFirst()))
+        case "swipe":
+            guard args.count > 1 else { throw usage("ui swipe requires a direction or coordinates") }; return try uiAction("/swipe", args: Array(args.dropFirst()))
+        case "type":
+            guard args.count > 1 else { throw usage("ui type requires text") }; return try uiAction("/type", args: Array(args.dropFirst()))
+        case "button", "alert":
+            guard args.count > 1 else { throw usage("ui \(action) requires an action") }; return try uiAction("/\(action)", args: Array(args.dropFirst()))
+        case "screenshot":
+            let output = args.firstIndex(of: "--output").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? FileManager.default.currentDirectoryPath
+            let directory = URL(fileURLWithPath: output, isDirectory: true); try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true); let path = directory.appendingPathComponent("CosmoKit-UI-\(Int(Date().timeIntervalSince1970)).png").path; let data = try Driver.call("/screenshot"); try data.write(to: URL(fileURLWithPath: path)); return CommandOutcome(human: path, json: UIScreenshotPayload(path: path, width: 0, height: 0, bytes: data.count))
+        case "wait":
+            guard args.count > 1 else { throw usage("usage: cosmokit ui wait \"<text>\" [--timeout 10] [--gone] [--interval 0.3]") }
+            var text = ""
+            var timeout: Double = 10.0
+            var gone = false
+            var interval: Double = 0.3
+            var waitApp: String?
+            var index = 1
+            while index < args.count {
+                switch args[index] {
+                case "--timeout" where index + 1 < args.count:
+                    if let val = Double(args[index + 1]) { timeout = val }
+                    index += 2
+                case "--interval" where index + 1 < args.count:
+                    if let val = Double(args[index + 1]) { interval = val }
+                    index += 2
+                case "--app" where index + 1 < args.count:
+                    waitApp = args[index + 1]
+                    index += 2
+                case "--gone":
+                    gone = true
+                    index += 1
+                default:
+                    if !args[index].hasPrefix("--") && text.isEmpty {
+                        text = args[index]
+                    }
+                    index += 1
+                }
+            }
+            guard !text.isEmpty else { throw usage("ui wait requires search text") }
+
+            let start = Date()
+            var waitQuery: [String: Any] = [:]
+            if let waitApp { waitQuery["app"] = waitApp }
+            while true {
+                let data = try Driver.call("/tree", method: "GET", json: waitQuery.isEmpty ? nil : waitQuery)
+                let snapshot = try UITree.parse(data)
+                let matches = UITree.find(snapshot, text: text)
+                if gone {
+                    if matches.isEmpty {
+                        let hash = UITree.screenHash(snapshot)
+                        let human = "screen: \(hash)\ngone: \"\(text)\""
+                        let payload = WaitPayload(screen: hash, ref: nil, element: nil, gone: true)
+                        return CommandOutcome(human: human, json: payload)
+                    }
+                } else {
+                    if let match = matches.first {
+                        let hash = UITree.screenHash(snapshot)
+                        let row = UITree.formatElement(match, mode: .act)
+                        let human = "screen: \(hash)\n\(row)"
+                        let elemPayload = FeedbackElementPayload(
+                            ref: match.ref,
+                            type: match.type,
+                            label: match.label,
+                            identifier: match.identifier,
+                            frame: match.frame
+                        )
+                        let payload = WaitPayload(screen: hash, ref: match.ref, element: elemPayload, gone: false)
+                        return CommandOutcome(human: human, json: payload)
+                    }
+                }
+                if Date().timeIntervalSince(start) >= timeout {
+                    throw CLIError(commandError: CommandError(
+                        code: .timeout,
+                        message: "Timed out waiting for \(gone ? "absence of " : "")\"\(text)\" after \(timeout)s"
+                    ))
+                }
+                Thread.sleep(forTimeInterval: interval)
+            }
+        case "do":
+            guard args.count > 1 else { throw usage("usage: cosmokit ui do [--screen <hash>] <step> [<step>...]") }
+            var screenHash: String? = nil
+            var steps: [String] = []
+            var index = 1
+            while index < args.count {
+                if args[index] == "--screen" && index + 1 < args.count {
+                    screenHash = args[index + 1]
+                    index += 2
+                } else {
+                    steps.append(args[index])
+                    index += 1
+                }
+            }
+            guard !steps.isEmpty else { throw usage("ui do requires at least one step") }
+
+            for (i, step) in steps.enumerated() {
+                var stepArgs = splitArguments(step)
+                if stepArgs.first == "ui" { stepArgs.removeFirst() }
+                if i == 0, let screenHash, !stepArgs.contains("--screen") {
+                    stepArgs += ["--screen", screenHash]
+                }
+                do {
+                    _ = try performUI(stepArgs)
+                } catch let error as CLIError {
+                    let stepNum = i + 1
+                    let msg = "Step \(stepNum) of \(steps.count) failed ('\(step)'): \(error.commandError.message)"
+                    let err = CommandError(
+                        code: error.commandError.code,
+                        message: msg,
+                        expected: error.commandError.expected,
+                        actual: error.commandError.actual
+                    )
+                    throw CLIError(commandError: err)
+                } catch {
+                    let stepNum = i + 1
+                    let msg = "Step \(stepNum) of \(steps.count) failed ('\(step)'): \(error.localizedDescription)"
+                    throw CLIError(commandError: CommandError(code: .usage, message: msg))
+                }
+            }
+
+            let data = try Driver.call("/tree")
+            var snapshot = try UITree.parse(data)
+            let hash = UITree.screenHash(snapshot)
+            snapshot.screen = hash
+            let human = UITree.compact(snapshot, mode: .act)
+            let payload = DoPayload(screen: hash, stepsCompleted: steps.count, totalSteps: steps.count, app: snapshot.app)
+            return CommandOutcome(human: human, json: payload)
+        default: throw usage("unknown ui action \(action)")
+        }
+    }
+
+    public static func splitArguments(_ string: String) -> [String] {
+        var args: [String] = []
+        var current = ""
+        var inSingle = false
+        var inDouble = false
+        for ch in string {
+            if ch == "'" && !inDouble { inSingle.toggle(); continue }
+            if ch == "\"" && !inSingle { inDouble.toggle(); continue }
+            if ch == " " && !inSingle && !inDouble {
+                if !current.isEmpty { args.append(current); current = "" }
+                continue
+            }
+            current.append(ch)
+        }
+        if !current.isEmpty { args.append(current) }
+        return args
+    }
+
+    private static func uiAction(_ path: String, args: [String]) throws -> CommandOutcome {
+        var cleanArgs = args
+        var targetApp: String?
+        if let appIdx = cleanArgs.firstIndex(of: "--app"), appIdx + 1 < cleanArgs.count {
+            targetApp = cleanArgs[appIdx + 1]
+            cleanArgs.removeSubrange(appIdx...appIdx + 1)
+        }
+        if let screenIdx = cleanArgs.firstIndex(of: "--screen"), screenIdx + 1 < cleanArgs.count {
+            let expectedHash = cleanArgs[screenIdx + 1]
+            cleanArgs.removeSubrange(screenIdx...screenIdx + 1)
+            var query: [String: Any] = [:]
+            if let targetApp { query["app"] = targetApp }
+            let data = try Driver.call("/tree", method: "GET", json: query.isEmpty ? nil : query)
+            let snapshot = try UITree.parse(data)
+            let actualHash = UITree.screenHash(snapshot)
+            if actualHash != expectedHash {
+                throw CLIError(commandError: CommandError(
+                    code: .screenChanged,
+                    message: "Screen changed (expected \(expectedHash), actual \(actualHash))",
+                    expected: expectedHash,
+                    actual: actualHash
+                ))
+            }
+        }
+        var body: [String: Any] = [:]
+        if let targetApp { body["app"] = targetApp }
+        if let first = cleanArgs.first {
+            if let ref = Int(first) {
+                body["ref"] = ref
+            } else if first.contains(",") {
+                let values = first.split(separator: ",").compactMap { Double($0) }
+                if values.count == 2 {
+                    body["x"] = values[0]
+                    body["y"] = values[1]
+                } else {
+                    body["action"] = cleanArgs.joined(separator: " ")
+                }
+            } else {
+                body["action"] = cleanArgs.joined(separator: " ")
+            }
+        }
+        if path == "/type" {
+            if let intoIdx = cleanArgs.firstIndex(of: "--into"), intoIdx + 1 < cleanArgs.count, let ref = Int(cleanArgs[intoIdx + 1]) {
+                body["ref"] = ref
+                let textParts = cleanArgs.prefix(intoIdx)
+                body["text"] = textParts.joined(separator: " ")
+            } else {
+                body["text"] = cleanArgs.joined(separator: " ")
+            }
+        }
+        _ = try Driver.call(path, method: "POST", json: body)
+        return CommandOutcome(human: "OK", json: DriverActionPayload(message: "OK"))
+    }
+
+    public static var startStreamForTesting: ((Device, Int, Double, Double, String) throws -> StreamStatusPayload)? = nil
+
+    private static func spawnDaemon(device: Device, args: [String]) throws -> CommandOutcome {
+        let executablePath: String = {
+            if let path = Bundle.main.executablePath, FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+            if let argv0 = CommandLine.arguments.first, FileManager.default.isExecutableFile(atPath: argv0) {
+                return argv0
+            }
+            return "/usr/local/bin/cosmokit"
+        }()
+
+        let logDir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/cosmokit")
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        let logPath = logDir.appendingPathComponent("stream-\(device.udid).log").path
+
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+        defer { posix_spawn_file_actions_destroy(&fileActions) }
+
+        // fd 0 -> /dev/null
+        posix_spawn_file_actions_addopen(&fileActions, 0, "/dev/null", O_RDONLY, 0)
+        // fd 1 & 2 -> logPath
+        posix_spawn_file_actions_addopen(&fileActions, 1, logPath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        posix_spawn_file_actions_addopen(&fileActions, 2, logPath, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        defer { posix_spawnattr_destroy(&attr) }
+
+        // setsid to detach from controlling terminal
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID))
+
+        // Child command: cosmokit agent stream <args minus --daemon> --foreground
+        let childArgs = ["cosmokit", "agent", "stream"] + args.filter { $0 != "--daemon" } + ["--foreground"]
+        var cArgs = childArgs.map { strdup($0) }
+        cArgs.append(nil)
+        defer { for ptr in cArgs where ptr != nil { free(ptr) } }
+
+        var pid: pid_t = 0
+        let spawnErr = posix_spawn(&pid, executablePath, &fileActions, &attr, cArgs, environ)
+        guard spawnErr == 0 else {
+            throw CLIError(commandError: CommandError(code: .driverUnavailable, message: "Failed to spawn daemon process (posix_spawn returned \(spawnErr))"))
+        }
+
+        // Parent waits up to 5s for pid file to appear
+        let deadline = Date().addingTimeInterval(5.0)
+        var status = StreamServer.status(device: device.udid)
+        while !status.running && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+            status = StreamServer.status(device: device.udid)
+        }
+
+        guard status.running, let url = status.url else {
+            throw CLIError(commandError: CommandError(code: .driverUnavailable, message: "Stream daemon spawned (pid \(pid)), but failed to start within 5s. Check log at: \(logPath)"))
+        }
+
+        return CommandOutcome(human: url, json: status)
+    }
+
+    private static func performAgentStream(_ args: [String]) throws -> CommandOutcome {
+        if args.first == "stop" {
+            let deviceQuery = args.dropFirst().first(where: { !$0.hasPrefix("--") })
+            let result = try StreamServer.stop(device: deviceQuery)
+            return CommandOutcome(human: result.message, json: result)
+        }
+        if args.first == "status" {
+            let deviceQuery = args.dropFirst().first(where: { !$0.hasPrefix("--") })
+            let status = StreamServer.status(device: deviceQuery)
+            return CommandOutcome(human: status.running ? "Stream running: \(status.url ?? "")" : "Stream stopped", json: status)
+        }
+
+        var port = 8878
+        var fps = 4.0
+        var scale = 0.5
+        var openBrowser = false
+        var daemon = false
+        var foreground = false
+        var source = "simctl"
+        var deviceQuery: String? = nil
+
+        var index = 0
+        while index < args.count {
+            switch args[index] {
+            case "--port" where index + 1 < args.count:
+                if let val = Int(args[index + 1]) { port = val }
+                index += 2
+            case "--fps" where index + 1 < args.count:
+                if let val = Double(args[index + 1]) { fps = val }
+                index += 2
+            case "--scale" where index + 1 < args.count:
+                if let val = Double(args[index + 1]) { scale = val }
+                index += 2
+            case "--open":
+                openBrowser = true
+                index += 1
+            case "--daemon":
+                daemon = true
+                index += 1
+            case "--foreground":
+                foreground = true
+                index += 1
+            case "--source" where index + 1 < args.count:
+                source = args[index + 1]
+                index += 2
+            default:
+                if !args[index].hasPrefix("--") && deviceQuery == nil {
+                    deviceQuery = args[index]
+                }
+                index += 1
+            }
+        }
+
+        let device = try resolveDevice(deviceQuery)
+
+        if let override = startStreamForTesting {
+            let status = try override(device, port, fps, scale, source)
+            return CommandOutcome(human: status.url ?? "http://127.0.0.1:\(port)/", json: status)
+        }
+
+        // If daemon is requested and this is not already the re-spawned foreground child, spawn daemon
+        if daemon && !foreground {
+            return try spawnDaemon(device: device, args: args)
+        }
+
+        let server = StreamServer(port: port, device: device, fps: fps, scale: scale, source: source)
+        try server.start(openBrowser: openBrowser)
+
+        let status = StreamStatusPayload(running: true, port: port, pid: Int(ProcessInfo.processInfo.processIdentifier), url: server.url)
+
+        if daemon {
+            return CommandOutcome(human: server.url, json: status)
+        }
+
+        if !foreground {
+            print(server.url)
+            fflush(stdout)
+        }
+
+        let pidFile = StreamServer.pidFile(for: device.udid)
+        let cleanup = {
+            try? FileManager.default.removeItem(at: pidFile)
+            exit(0)
+        }
+
+        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        sigint.setEventHandler(handler: cleanup)
+        sigint.resume()
+        signal(SIGINT, SIG_IGN)
+
+        let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        sigterm.setEventHandler(handler: cleanup)
+        sigterm.resume()
+        signal(SIGTERM, SIG_IGN)
+
+        RunLoop.current.run()
+        return CommandOutcome(human: server.url, json: status)
+    }
+
+    private static func performFeedback(_ args: [String]) throws -> CommandOutcome {
+        guard let action = args.first else {
+            throw usage("usage: cosmokit feedback next|list|ack|clear [name|udid] [options]")
+        }
+
+        switch action {
+        case "next":
+            var wait: Double = 0
+            var deviceQuery: String? = nil
+            var index = 1
+            while index < args.count {
+                if args[index] == "--wait" {
+                    if index + 1 < args.count, let val = Double(args[index + 1]) {
+                        wait = val
+                        index += 2
+                    } else {
+                        wait = 300
+                        index += 1
+                    }
+                } else if !args[index].hasPrefix("--") {
+                    deviceQuery = args[index]
+                    index += 1
+                } else {
+                    index += 1
+                }
+            }
+            let device = try resolveDevice(deviceQuery)
+            guard let record = FeedbackStore.nextUnread(udid: device.udid, wait: wait) else {
+                throw CLIError(commandError: CommandError(code: .timeout, message: "timed out waiting for feedback"))
+            }
+            let human = FeedbackStore.formatCompact(record)
+            return CommandOutcome(human: human, json: record)
+
+        case "list":
+            let deviceQuery = args.dropFirst().first(where: { !$0.hasPrefix("--") })
+            let device = try resolveDevice(deviceQuery)
+            let records = FeedbackStore.readAll(udid: device.udid)
+            let human = records.isEmpty ? "No feedback recorded." : records.map(FeedbackStore.formatCompact).joined(separator: "\n")
+            return CommandOutcome(human: human, json: FeedbackListPayload(records: records))
+
+        case "ack":
+            guard args.count > 1, let seq = Int(args[1]) else {
+                throw usage("usage: cosmokit feedback ack <seq> [name|udid]")
+            }
+            let deviceQuery = args.dropFirst(2).first(where: { !$0.hasPrefix("--") })
+            let device = try resolveDevice(deviceQuery)
+            guard let record = try FeedbackStore.ack(udid: device.udid, seq: seq) else {
+                throw CLIError(commandError: CommandError(code: .usage, message: "no feedback record with seq #\(seq)"))
+            }
+            let human = FeedbackStore.formatCompact(record)
+            return CommandOutcome(human: human, json: record)
+
+        case "clear":
+            let deviceQuery = args.dropFirst().first(where: { !$0.hasPrefix("--") })
+            let device = try resolveDevice(deviceQuery)
+            let count = try FeedbackStore.clear(udid: device.udid)
+            let human = "Cleared \(count) feedback record(s) on \(device.name)"
+            return CommandOutcome(human: human, json: FeedbackClearPayload(cleared: true, count: count))
+
+        case "prompt":
+            var seq: Int? = nil
+            var scope = "unacked"
+            var deviceQuery: String? = nil
+            var index = 1
+            while index < args.count {
+                switch args[index] {
+                case "--seq":
+                    guard index + 1 < args.count, let val = Int(args[index + 1]) else {
+                        throw usage("usage: cosmokit feedback prompt [--seq N | --all | --unacked] [name|udid]")
+                    }
+                    seq = val
+                    index += 2
+                case "--all":
+                    scope = "all"
+                    index += 1
+                case "--unacked":
+                    scope = "unacked"
+                    index += 1
+                default:
+                    if !args[index].hasPrefix("--") && deviceQuery == nil {
+                        deviceQuery = args[index]
+                    }
+                    index += 1
+                }
+            }
+            let device = try resolveDevice(deviceQuery)
+            let records = FeedbackStore.readAll(udid: device.udid)
+            let selectedRecords: [FeedbackRecordPayload]
+            if let seq = seq {
+                guard let target = records.first(where: { $0.seq == seq }) else {
+                    throw CLIError(commandError: CommandError(code: .usage, message: "no feedback record with seq #\(seq)"))
+                }
+                selectedRecords = [target]
+            } else if scope == "all" {
+                selectedRecords = records
+            } else {
+                selectedRecords = records.filter { ($0.acked ?? false) == false }
+            }
+            let rendered = FeedbackPrompt.render(selectedRecords, app: nil)
+            return CommandOutcome(human: rendered, json: FeedbackPromptPayload(text: rendered))
+
+        default:
+            throw usage("usage: cosmokit feedback next|list|ack|clear|prompt [name|udid] [options]")
         }
     }
 
@@ -680,6 +1224,109 @@ public enum CLI {
         }
         let bypass = payload.bypassList.isEmpty ? "" : " (\(payload.bypassList.count) bypass rules)"
         return "\(line("HTTP", enabled: payload.httpEnabled, host: payload.httpHost, port: payload.httpPort)), \(line("HTTPS", enabled: payload.httpsEnabled, host: payload.httpsHost, port: payload.httpsPort))\(bypass)"
+    }
+
+    private static func performThrottle(_ args: [String]) throws -> CommandOutcome {
+        guard let first = args.first else {
+            throw usage("usage: cosmokit throttle <edge|3g|lte|verybad|off|status|custom [options]>")
+        }
+
+        if first == "status" {
+            let status = try AppControl.status()
+            return CommandOutcome(human: AppControl.humanText(for: status), json: status)
+        }
+
+        if first == "custom" {
+            var latencyMs: Int?
+            var downKbps: Int?
+            var upKbps: Int?
+            var failurePct: Int?
+
+            var index = 1
+            while index < args.count {
+                let arg = args[index]
+                switch arg {
+                case "--latency-ms":
+                    guard index + 1 < args.count, let val = Int(args[index + 1]) else {
+                        throw usage("--latency-ms requires an integer")
+                    }
+                    latencyMs = val
+                    index += 2
+                case "--down-kbps":
+                    guard index + 1 < args.count, let val = Int(args[index + 1]) else {
+                        throw usage("--down-kbps requires an integer")
+                    }
+                    downKbps = val
+                    index += 2
+                case "--up-kbps":
+                    guard index + 1 < args.count, let val = Int(args[index + 1]) else {
+                        throw usage("--up-kbps requires an integer")
+                    }
+                    upKbps = val
+                    index += 2
+                case "--failure-pct":
+                    guard index + 1 < args.count, let val = Int(args[index + 1]) else {
+                        throw usage("--failure-pct requires an integer")
+                    }
+                    failurePct = val
+                    index += 2
+                default:
+                    throw usage("unknown option for throttle custom: \(arg)")
+                }
+            }
+
+            var customDict: [String: Any] = [:]
+            if let latencyMs { customDict["latencyMs"] = latencyMs }
+            if let downKbps { customDict["downloadKbps"] = downKbps }
+            if let upKbps { customDict["uploadKbps"] = upKbps }
+            if let failurePct { customDict["failureRatePercent"] = failurePct }
+
+            let status = try AppControl.throttle(preset: nil, custom: customDict)
+            return CommandOutcome(human: AppControl.humanText(for: status), json: status)
+        }
+
+        let normalized: String
+        switch first.lowercased() {
+        case "edge":
+            normalized = "edge"
+        case "3g", "threeg":
+            normalized = "threeG"
+        case "lte":
+            normalized = "lte"
+        case "verybad":
+            normalized = "veryBad"
+        case "off":
+            normalized = "off"
+        case "offline":
+            normalized = "offline"
+        default:
+            if ["edge", "threeG", "lte", "veryBad", "off", "offline"].contains(first) {
+                normalized = first
+            } else {
+                throw usage("unknown preset '\(first)'; expected one of: edge, 3g, lte, verybad, off, custom, status")
+            }
+        }
+
+        let status = try AppControl.throttle(preset: normalized, custom: nil)
+        return CommandOutcome(human: AppControl.humanText(for: status), json: status)
+    }
+
+    private static func performOffline(_ args: [String]) throws -> CommandOutcome {
+        guard let first = args.first else {
+            throw usage("usage: cosmokit offline on|off")
+        }
+        let on: Bool
+        switch first.lowercased() {
+        case "on", "true", "1":
+            on = true
+        case "off", "false", "0":
+            on = false
+        default:
+            throw usage("usage: cosmokit offline on|off")
+        }
+
+        let status = try AppControl.offline(on: on)
+        return CommandOutcome(human: AppControl.humanText(for: status), json: status)
     }
 
     private static func parseDefaultsReadArgs(_ args: [String]) throws -> (bundleID: String, device: String?) {
