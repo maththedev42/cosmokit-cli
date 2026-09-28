@@ -130,6 +130,18 @@ public enum Driver {
         try? bundleID.write(to: file, atomically: true, encoding: .utf8)
     }
 
+    public static func ensureTargetApp(_ bundleID: String, device: String? = nil, port: Int = 8877) throws {
+        let deviceID = (try? resolveDevice(device)) ?? (device ?? "default")
+        let saved = targetApp(for: deviceID)
+        if saved == bundleID {
+            return
+        }
+        saveTargetApp(bundleID, for: deviceID)
+        if status(device: deviceID).running {
+            _ = try? call("/app?bundleId=\(bundleID)", method: "POST", json: ["bundleId": bundleID], port: port)
+        }
+    }
+
     private static func xctestrunFile(in directory: URL) throws -> URL? { let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]); return enumerator?.compactMap { $0 as? URL }.first { $0.pathExtension == "xctestrun" } }
     private static func requireXctestrun(in directory: URL) throws -> URL { guard let file = try xctestrunFile(in: directory) else { throw driverError("driver build did not produce an .xctestrun file") }; return file }
     private static func driverError(_ message: String) -> CLIError { CLIError(commandError: CommandError(code: .driverUnavailable, message: message)) }

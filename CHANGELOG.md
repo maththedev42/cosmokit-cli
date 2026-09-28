@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — 2026-09-28
+
+- Fixed `ui tree --app` latency: snapshot traversal via `XCElementSnapshot` and skipping redundant target switches drop repeat calls from ~81 s to < 1.0 s.
+- Added resilient fallback to public AX hierarchy traversal when the private snapshot selector is missing.
+- Updated UI tree benchmark with honest per-screen measurements across distinct scroll states, verifying 92.7% reduction vs raw driver JSON and 94.6% vs idb.
+
 ## 0.4.0 — 2026-09-26
 
 - Added interactive Control mode to `agent stream`: click to tap, drag to swipe, debounced typing into focused fields, and hardware home button.

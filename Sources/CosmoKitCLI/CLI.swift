@@ -39,7 +39,7 @@ public struct CLIError: LocalizedError {
 }
 
 public enum CLI {
-    public static let version = "0.4.0"
+    public static let version = "0.4.1"
     public static var runSimctlForTesting: (_ arguments: [String]) throws -> String = { try Simctl.run($0) }
     public static var runSimctlTimedForTesting: (_ arguments: [String], _ timeout: TimeInterval) throws -> String = { try Simctl.run($0, timeout: $1) }
     public static var proxySourceForTesting: () -> [String: Any]? = { SCDynamicStoreCopyProxies(nil) as? [String: Any] }
@@ -319,10 +319,7 @@ public enum CLI {
             let device = try resolveDevice(args.count > 1 ? args[1] : nil)
             let simctlOutput = try runSimctl(["launch", device.udid, bundleID])
             let pid = simctlOutput.split(whereSeparator: { $0 == ":" || $0 == " " || $0 == "\n" }).compactMap { Int($0) }.first
-            Driver.saveTargetApp(bundleID, for: device.udid)
-            if Driver.status(device: device.udid).running {
-                _ = try? Driver.call("/app?bundleId=\(bundleID)", method: "POST", json: ["bundleId": bundleID])
-            }
+            try Driver.ensureTargetApp(bundleID, device: device.udid)
             return CommandOutcome(human: simctlOutput.trimmingCharacters(in: .whitespacesAndNewlines), json: LaunchPayload(udid: device.udid, name: device.name, bundleID: bundleID, pid: pid))
 
         case "terminate":
@@ -541,6 +538,7 @@ public enum CLI {
         case "tree":
             var mode = UITreeMode.act; var depth: String?; var max = 80; var app: String?; var index = 1
             while index < args.count { switch args[index] { case "--mode": guard index + 1 < args.count, let value = UITreeMode(rawValue: args[index + 1]) else { throw usage("mode must be nav, act, or debug") }; mode = value; index += 2; case "--depth": guard index + 1 < args.count else { throw usage("--depth requires a value") }; depth = args[index + 1]; index += 2; case "--max": guard index + 1 < args.count, let value = Int(args[index + 1]), value > 0 else { throw usage("--max requires a positive integer") }; max = value; index += 2; case "--app": guard index + 1 < args.count else { throw usage("--app requires a bundle id") }; app = args[index + 1]; index += 2; default: index += 1 } }
+            if let app { try Driver.ensureTargetApp(app) }
             var query: [String: Any] = [:]; if let depth { query["depth"] = Int(depth) ?? depth }; if let app { query["app"] = app }
             let data = try Driver.call("/tree", method: "GET", json: query.isEmpty ? nil : query)
             var snapshot = try UITree.parse(data)
@@ -561,6 +559,7 @@ public enum CLI {
                 }
             }
             guard !findArgs.isEmpty else { throw usage("ui find requires text") }
+            if let searchApp { try Driver.ensureTargetApp(searchApp) }
             var findQuery: [String: Any] = [:]
             if let searchApp { findQuery["app"] = searchApp }
             let snapshot = try UITree.parse(Driver.call("/tree", method: "GET", json: findQuery.isEmpty ? nil : findQuery))
@@ -609,6 +608,7 @@ public enum CLI {
                 }
             }
             guard !text.isEmpty else { throw usage("ui wait requires search text") }
+            if let waitApp { try Driver.ensureTargetApp(waitApp) }
 
             let start = Date()
             var waitQuery: [String: Any] = [:]
@@ -649,13 +649,17 @@ public enum CLI {
                 Thread.sleep(forTimeInterval: interval)
             }
         case "do":
-            guard args.count > 1 else { throw usage("usage: cosmokit ui do [--screen <hash>] <step> [<step>...]") }
+            guard args.count > 1 else { throw usage("usage: cosmokit ui do [--screen <hash>] [--app <bundle>] <step> [<step>...]") }
             var screenHash: String? = nil
+            var doApp: String? = nil
             var steps: [String] = []
             var index = 1
             while index < args.count {
                 if args[index] == "--screen" && index + 1 < args.count {
                     screenHash = args[index + 1]
+                    index += 2
+                } else if args[index] == "--app" && index + 1 < args.count {
+                    doApp = args[index + 1]
                     index += 2
                 } else {
                     steps.append(args[index])
@@ -663,12 +667,16 @@ public enum CLI {
                 }
             }
             guard !steps.isEmpty else { throw usage("ui do requires at least one step") }
+            if let doApp { try Driver.ensureTargetApp(doApp) }
 
             for (i, step) in steps.enumerated() {
                 var stepArgs = splitArguments(step)
                 if stepArgs.first == "ui" { stepArgs.removeFirst() }
                 if i == 0, let screenHash, !stepArgs.contains("--screen") {
                     stepArgs += ["--screen", screenHash]
+                }
+                if let doApp, !stepArgs.contains("--app") {
+                    stepArgs += ["--app", doApp]
                 }
                 do {
                     _ = try performUI(stepArgs)
@@ -689,7 +697,9 @@ public enum CLI {
                 }
             }
 
-            let data = try Driver.call("/tree")
+            var treeQuery: [String: Any] = [:]
+            if let doApp { treeQuery["app"] = doApp }
+            let data = try Driver.call("/tree", method: "GET", json: treeQuery.isEmpty ? nil : treeQuery)
             var snapshot = try UITree.parse(data)
             let hash = UITree.screenHash(snapshot)
             snapshot.screen = hash
@@ -724,6 +734,9 @@ public enum CLI {
         if let appIdx = cleanArgs.firstIndex(of: "--app"), appIdx + 1 < cleanArgs.count {
             targetApp = cleanArgs[appIdx + 1]
             cleanArgs.removeSubrange(appIdx...appIdx + 1)
+        }
+        if let targetApp {
+            try Driver.ensureTargetApp(targetApp)
         }
         if let screenIdx = cleanArgs.firstIndex(of: "--screen"), screenIdx + 1 < cleanArgs.count {
             let expectedHash = cleanArgs[screenIdx + 1]

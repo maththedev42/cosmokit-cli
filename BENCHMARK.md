@@ -1,11 +1,12 @@
 # CosmoKit UI tree benchmark
 
-- Date (UTC): 2026-09-26
+- Date (UTC): 2026-09-28
 - macOS: 26.4
 - Xcode: Xcode 26.4.1 Build version 17E202
-- Simulator: iPhone 16 Pro (B5029438-33A9-47E0-ACA4-C7B790A12E64), 
-- CLI version: 0.4.0
-- Test app commit: 3b54f749eb988fe839e91b45129297089871ecf0
+- Simulator: iPhone 16 Pro (B5029438-33A9-47E0-ACA4-C7B790A12E64), iOS 26.4
+- CLI version: 0.4.1
+- Driver start: already running
+- Test app commit: 7d2e529575824b450cd1c5a2cb06d2b769bdf3ed
 - idb: installed
 - Reproduce: `bash cli/scripts/benchmark.sh --udid B5029438-33A9-47E0-ACA4-C7B790A12E64 --app apps.mjkweber.CosmoKitTestApp --screens home,list,form,modal --write`
 
@@ -15,11 +16,45 @@ of five runs and is wall-clock `real` time.
 
 | Screen | act bytes (≈ tokens) | nav bytes (≈ tokens) | debug bytes (≈ tokens) | raw driver JSON bytes (≈ tokens) | idb bytes (≈ tokens) | screenshot PNG bytes | act vs raw | act vs idb | act median (s) | raw median (s) | idb median (s) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| home | 2240 (560) | 6105 (1526) | 6105 (1526) | 32665 (8166) | 2029 (507) | 1790447 | 93.1% | -10.4% | 87.42 | 88.35 | 0.25 |
-| list | 2240 (560) | 6105 (1526) | 6105 (1526) | 32714 (8178) | 44053 (11013) | 2257720 | 93.2% | 94.9% | 85.89 | 83.73 | 0.44 |
-| form | 2240 (560) | 6105 (1526) | 6105 (1526) | 31678 (7920) | 44053 (11013) | 2188925 | 92.9% | 94.9% | 79.43 | 80.00 | 0.47 |
-| modal | 2240 (560) | 6105 (1526) | 6105 (1526) | 31174 (7794) | 44053 (11013) | 2160829 | 92.8% | 94.9% | 77.38 | 78.69 | 0.65 |
-| **Mean** | — | — | — | — | — | — | **93.0%** | **68.6%** | — | — | — |
+| home | 2184 (546) | 5803 (1451) | 5803 (1451) | 33694 (8424) | 45727 (11432) | 2340914 | 93.5% | 95.2% | 0.81 | 0.53 | 0.53 |
+| list | 2743 (686) | 5804 (1451) | 5804 (1451) | 35675 (8919) | 48758 (12190) | 1710782 | 92.3% | 94.4% | 0.82 | 0.43 | 0.55 |
+| form | 2775 (694) | 5814 (1454) | 5814 (1454) | 35821 (8955) | 48978 (12244) | 1576693 | 92.3% | 94.3% | 0.93 | 0.45 | 0.78 |
+| modal | 2524 (631) | 5854 (1464) | 5854 (1464) | 34766 (8692) | 47272 (11818) | 1296821 | 92.7% | 94.7% | 0.76 | 0.48 | 0.48 |
+| **Mean** | — | — | — | — | — | — | **92.7%** | **94.6%** | — | — | — |
 
 The quoted percentages are for this four-screen test app run on this date:
-act vs raw driver JSON = 93.0%; act vs idb = 68.6%.
+act vs raw driver JSON = 92.7%; act vs idb = 94.6%.
+
+## Appendix: First 3 lines of act output per screen
+
+### home (hash: c4eda23f)
+
+```
+screen: c4eda23f
+[9] image "rectangle.3.group.bubble" (186,61 29×28) value="" placeholder=""
+[16] image "Favorito" (67,248 12×11) value="" placeholder=""
+```
+
+### list (hash: 5f9befb4)
+
+```
+screen: 5f9befb4
+[9] image "rectangle.3.group.bubble" (186,-591 29×28) value="" placeholder=""
+[16] image "Favorito" (67,-404 12×11) value="" placeholder=""
+```
+
+### form (hash: 7fd4d483)
+
+```
+screen: 7fd4d483
+[9] image "rectangle.3.group.bubble" (186,-1262 29×28) value="" placeholder=""
+[16] image "Favorito" (67,-1075 12×11) value="" placeholder=""
+```
+
+### modal (hash: c0bde181)
+
+```
+screen: c0bde181
+[9] image "rectangle.3.group.bubble" (186,-1919 29×28) value="" placeholder=""
+[16] image "Favorito" (67,-1731 12×11) value="" placeholder=""
+```

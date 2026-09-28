@@ -23,9 +23,9 @@ final class StreamFeedbackTests: XCTestCase {
             y: 612,
             element: element,
             text: "This should be disabled until the form is valid",
-            frame: "/tmp/developer/Library/Application Support/cosmokit/feedback/SIM-UDID-12345/3.png",
+            frame: "/Users/developer/Library/Application Support/cosmokit/feedback/SIM-UDID-12345/3.png",
             branch: "feat/x",
-            worktree: "/tmp/developer/Projects/CosmoKit",
+            worktree: "/Users/developer/Projects/CosmoKit",
             app: "com.example.app",
             udid: "SIM-UDID-12345",
             acked: false
@@ -416,9 +416,9 @@ final class StreamFeedbackTests: XCTestCase {
             y: 612.6,
             element: element,
             text: "This button should say `Upgrade` instead of `Continue`",
-            frame: "/tmp/developer/Library/Application Support/cosmokit/feedback/SIM-UDID-12345/3.png",
+            frame: "/Users/developer/Library/Application Support/cosmokit/feedback/SIM-UDID-12345/3.png",
             branch: "feat/pro-upsell",
-            worktree: "/tmp/developer/Projects/CosmoKit",
+            worktree: "/Users/developer/Projects/CosmoKit",
             app: "com.example.cosmokit",
             udid: "B5029438-33A9-47E0-ACA4-C7B790A12E64",
             acked: false
@@ -429,8 +429,8 @@ final class StreamFeedbackTests: XCTestCase {
         Element: Button "Continue with \\`Pro\\`" (id: cta.continue, ref 7, frame 187,612 280×44)
         Point: (187,613) pt
         Note: This button should say \\`Upgrade\\` instead of \\`Continue\\`
-        Screenshot: /tmp/developer/Library/Application Support/cosmokit/feedback/SIM-UDID-12345/3.png
-        Branch: feat/pro-upsell  Worktree: /tmp/developer/Projects/CosmoKit
+        Screenshot: /Users/developer/Library/Application Support/cosmokit/feedback/SIM-UDID-12345/3.png
+        Branch: feat/pro-upsell  Worktree: /Users/developer/Projects/CosmoKit
 
         To act on this: `cosmokit ui tree --mode act` then `cosmokit ui tap <ref> --screen <hash>`.
         Mark done with `cosmokit feedback ack <seq>`.
@@ -485,7 +485,7 @@ final class StreamFeedbackTests: XCTestCase {
             text: "Fix submit validation",
             framePath: "/tmp/1.png",
             branch: "main",
-            worktree: "/tmp/dev/repo",
+            worktree: "/Users/dev/repo",
             app: "com.example.app"
         )
 

@@ -96,9 +96,12 @@ fi
 "$CLI_BIN" launch "$APP_BUNDLE" "$UDID" >/dev/null
 
 DRIVER_STARTED=0
+DRIVER_START_TIME="already running"
 if ! curl -fsS "http://127.0.0.1:8877/tree" | jq -e '.elements' >/dev/null 2>&1; then
   "$CLI_BIN" agent stop "$UDID" >/dev/null 2>&1 || true
-  "$CLI_BIN" agent start "$UDID" >/dev/null
+  driver_start_file="$TMP_ROOT/driver-start.time"
+  /usr/bin/time -p "$CLI_BIN" agent start "$UDID" >/dev/null 2>"$driver_start_file"
+  DRIVER_START_TIME="$(awk '$1 == "real" { print $2 }' "$driver_start_file") s"
   DRIVER_STARTED=1
 fi
 
@@ -111,10 +114,10 @@ fi
 
 screen_batch() {
   case "$1" in
-    home) "$CLI_BIN" ui "do" "wait CosmoKit" ;;
-    list) "$CLI_BIN" ui "do" "swipe up" "swipe up" ;;
-    form) "$CLI_BIN" ui "do" "swipe up" "swipe up" "swipe up" ;;
-    modal) "$CLI_BIN" ui "do" "swipe up" "swipe up" "swipe up" "swipe up" ;;
+    home) "$CLI_BIN" ui "do" --app "$APP_BUNDLE" "wait CosmoKit" ;;
+    list) "$CLI_BIN" ui "do" --app "$APP_BUNDLE" "swipe up" ;;
+    form) "$CLI_BIN" ui "do" --app "$APP_BUNDLE" "swipe up" "swipe up" ;;
+    modal) "$CLI_BIN" ui "do" --app "$APP_BUNDLE" "swipe up" "swipe up" "swipe up" ;;
     *) echo "error: unknown screen '$1'; use home,list,form,modal" >&2; return 2 ;;
   esac
 }
@@ -160,7 +163,7 @@ percent() { awk -v a="$1" -v b="$2" 'BEGIN { if (b == 0) print "n/a"; else print
 
 DEVICE_JSON=$(xcrun simctl list devices -j)
 DEVICE_NAME=$(jq -r --arg udid "$UDID" '.devices[][] | select(.udid == $udid) | .name' <<< "$DEVICE_JSON")
-RUNTIME_ID=$(jq -r --arg udid "$UDID" '.devices[][] | select(.udid == $udid) | .runtime' <<< "$DEVICE_JSON")
+RUNTIME_ID=$(jq -r --arg udid "$UDID" '.devices | to_entries[] | select(.value[] | .udid == $udid) | .key' <<< "$DEVICE_JSON")
 RUNTIME_NAME=$(xcrun simctl list runtimes -j | jq -r --arg id "$RUNTIME_ID" '.runtimes[] | select(.identifier == $id) | .name')
 MACOS_VERSION=$(sw_vers -productVersion)
 XCODE_VERSION=$(xcodebuild -version | paste -sd ' ' -)
@@ -169,7 +172,7 @@ TEST_APP_ROOT=${TEST_APP_ROOT:-$REPO_ROOT/../CosmoKit/CosmoKitTestApp}
 TEST_APP_COMMIT=$(git -C "$TEST_APP_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
 RUN_COMMAND="bash cli/scripts/benchmark.sh --udid $UDID --app $APP_BUNDLE --screens $SCREENS_CSV --write"
 
-declare -a ACT_BYTES RAW_BYTES IDB_BYTES_LIST
+declare -a ACT_BYTES RAW_BYTES IDB_BYTES_LIST SCREEN_HASHES SCREEN_SNIPPETS
 REPORT_ROWS=()
 for index in 0 1 2 3; do
   screen=${SCREEN_NAMES[$index]}
@@ -187,6 +190,21 @@ for index in 0 1 2 3; do
 
   measure_command "$act_file" "$CLI_BIN" ui tree --mode act --app "$APP_BUNDLE"
   act_bytes=$MEASURE_BYTES; act_time=$MEASURE_MEDIAN
+
+  act_hash=$(grep '^screen: ' "$act_file" | awk '{print $2}' || true)
+  if [[ -z "$act_hash" ]]; then
+    echo "error: failed to read screen hash for $screen from $act_file" >&2
+    exit 1
+  fi
+  for ((prev=0; prev<index; prev++)); do
+    if [[ "${SCREEN_HASHES[prev]}" == "$act_hash" ]]; then
+      echo "error: screen '$screen' has same screen hash ($act_hash) as '${SCREEN_NAMES[prev]}'" >&2
+      exit 1
+    fi
+  done
+  SCREEN_HASHES[index]=$act_hash
+  SCREEN_SNIPPETS[index]=$(head -n 3 "$act_file")
+
   measure_command "$nav_file" "$CLI_BIN" ui tree --mode nav --app "$APP_BUNDLE"
   nav_bytes=$MEASURE_BYTES
   measure_command "$debug_file" "$CLI_BIN" ui tree --mode debug --app "$APP_BUNDLE"
@@ -226,6 +244,22 @@ done
 MEAN_RAW=$(mean_percent raw)
 MEAN_IDB=$(mean_percent idb)
 
+IDB_HEADER="not installed"
+if command -v idb >/dev/null 2>&1; then
+  IDB_HEADER="installed"
+fi
+
+APPENDIX_SNIPPETS=""
+for ((idx=0; idx<4; idx++)); do
+  sname="${SCREEN_NAMES[idx]}"
+  shash="${SCREEN_HASHES[idx]}"
+  ssnip="${SCREEN_SNIPPETS[idx]}"
+  APPENDIX_SNIPPETS+=$'\n'"### $sname (hash: $shash)"$'\n\n'
+  APPENDIX_SNIPPETS+='```'$'\n'
+  APPENDIX_SNIPPETS+="$ssnip"$'\n'
+  APPENDIX_SNIPPETS+='```'$'\n'
+done
+
 REPORT=$(cat <<EOF
 # CosmoKit UI tree benchmark
 
@@ -234,8 +268,9 @@ REPORT=$(cat <<EOF
 - Xcode: $XCODE_VERSION
 - Simulator: $DEVICE_NAME ($UDID), $RUNTIME_NAME
 - CLI version: $CLI_VERSION
+- Driver start: $DRIVER_START_TIME
 - Test app commit: $TEST_APP_COMMIT
-- idb: $(if command -v idb >/dev/null 2>&1; then echo installed; else echo not installed; fi)
+- idb: $IDB_HEADER
 - Reproduce: \`$RUN_COMMAND\`
 
 Bytes are UTF-8 output bytes. Tokens are approximate bytes ÷ 4, matching the
@@ -249,6 +284,9 @@ $(printf '%s\n' "${REPORT_ROWS[@]}")
 
 The quoted percentages are for this four-screen test app run on this date:
 act vs raw driver JSON = $MEAN_RAW; act vs idb = $MEAN_IDB.
+
+## Appendix: First 3 lines of act output per screen
+$APPENDIX_SNIPPETS
 EOF
 )
 
