@@ -505,6 +505,15 @@ final class MCPServerTests: XCTestCase {
         XCTAssertLessThan(data.count, 20_096)
     }
 
+    func testChatReadToolDescriptionAndBehavior() throws {
+        let response = try object(for: #"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        let result = response["result"] as! [String: Any]
+        let tools = result["tools"] as! [[String: Any]]
+        let chatRead = tools.first { $0["name"] as? String == "chat_read" }
+        let description = chatRead?["description"] as? String
+        XCTAssertTrue(description?.contains("returns [] if nothing arrives; call again") == true)
+    }
+
     func testDefaultsReadResolvesContainerBeforeExport() throws {
         let device = Device(udid: "UDID", name: "iPhone", state: "Booted", isAvailable: true)
         CLI.resolveDeviceForTesting = { _ in device }

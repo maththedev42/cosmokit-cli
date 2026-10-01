@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 — 2026-10-01
+
+- `chat_read` no longer errors when nothing arrives: it returns `[]`, and the request timeout margin is now wait + 20 s.
+- Waits above 60 s are served as 25 s polls; `chat_read` returns `[]` if nothing arrives, so call again.
+
 ## 0.4.1 — 2026-09-28
 
 - Fixed `ui tree --app` latency: snapshot traversal via `XCElementSnapshot` and skipping redundant target switches drop repeat calls from ~81 s to < 1.0 s.

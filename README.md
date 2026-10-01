@@ -410,7 +410,7 @@ For UI tree inspection, `cosmokit ui tree --mode act` filters accessibility hier
 When CosmoKit is running, `cosmokit mcp` registers one chat thread for the
 current working directory. Any MCP client can use `chat_read` and
 `chat_reply`; the polling path works without special Claude Code support.
-Start with `chat_read`, and use `chat_reply` for results or questions. For
+Start with `chat_read` (it returns `[]` if nothing arrives; call again), and use `chat_reply` for results or questions. For
 Claude Code's experimental push mode, start the session with
 `claude --dangerously-load-development-channels server:cosmokit`; messages
 then arrive as channel events while the session is open. The MCP server also

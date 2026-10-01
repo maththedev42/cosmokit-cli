@@ -89,7 +89,20 @@ final class ChatClient {
         try registerIfNeeded()
         let bounded = min(max(wait, 0), 300)
         let path = "/v1/chat/threads/\(try requiredThreadID())/messages?unread=1&wait=\(String(format: "%.3f", bounded))"
-        let data = try AppControl.request(path: path, timeout: max(5, bounded + 5))
+        let data: Data
+        do {
+            data = try AppControl.request(path: path, timeout: bounded + 20)
+        } catch let error as CLIError {
+            throw error
+        } catch let urlError as URLError where urlError.code == .timedOut {
+            return []
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut {
+                return []
+            }
+            throw error
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode([ChatMessageWire].self, from: data)

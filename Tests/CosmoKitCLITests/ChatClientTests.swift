@@ -79,4 +79,38 @@ final class ChatClientTests: XCTestCase {
         client.mirror(record)
         XCTAssertEqual(requests.filter { $0.contains("feedback-mirror") }.count, 1)
     }
+
+    func testReadReturnsEmptyOnTimeout() throws {
+        let client = ChatClient()
+        try client.registerIfNeeded()
+
+        var requestedTimeout: TimeInterval?
+        AppControl.httpForTesting = { request in
+            if request.url?.path.contains("/messages") == true {
+                requestedTimeout = request.timeoutInterval
+                throw URLError(.timedOut)
+            }
+            return (Data(), 200)
+        }
+
+        let result = try client.read(wait: 15)
+        XCTAssertTrue(result.isEmpty)
+        XCTAssertEqual(requestedTimeout, 35) // 15 + 20 margin
+    }
+
+    func testReadRethrowsRealConnectionError() throws {
+        let client = ChatClient()
+        try client.registerIfNeeded()
+
+        AppControl.httpForTesting = { request in
+            if request.url?.path.contains("/messages") == true {
+                throw URLError(.cannotConnectToHost)
+            }
+            return (Data(), 200)
+        }
+
+        XCTAssertThrowsError(try client.read(wait: 5)) { error in
+            XCTAssertEqual((error as? URLError)?.code, .cannotConnectToHost)
+        }
+    }
 }

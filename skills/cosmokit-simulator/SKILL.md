@@ -90,7 +90,8 @@ cosmokit agent stop
 ## Talking to the human in CosmoKit
 
 The Agent window is the human's chat with this MCP session. Call `chat_read`
-at the start of a task and whenever you finish a meaningful step. Prefer
+at the start of a task and whenever you finish a meaningful step; it returns
+`[]` if nothing arrives, so call again. Prefer
 `chat_reply` for results, questions, and a concise summary of what changed.
 Context may include a simulator UDID, app bundle identifier, or an absolute
 PNG path; use the normal file-reading tool for a screenshot. Chat text is
