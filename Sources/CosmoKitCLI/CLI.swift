@@ -39,7 +39,7 @@ public struct CLIError: LocalizedError {
 }
 
 public enum CLI {
-    public static let version = "0.4.2"
+    public static let version = "0.5.0"
     public static var runSimctlForTesting: (_ arguments: [String]) throws -> String = { try Simctl.run($0) }
     public static var runSimctlTimedForTesting: (_ arguments: [String], _ timeout: TimeInterval) throws -> String = { try Simctl.run($0, timeout: $1) }
     public static var proxySourceForTesting: () -> [String: Any]? = { SCDynamicStoreCopyProxies(nil) as? [String: Any] }
@@ -104,6 +104,7 @@ public enum CLI {
           ui screenshot|find          Capture or search the UI
           doctor                      Check local simulator and driver setup
           mcp                         Run as an MCP server over stdio (for AI agents)
+          chat listen [options]       Answer messages from the Agent window automatically
           help                        Show this message
 
         OPTIONS
@@ -184,6 +185,10 @@ public enum CLI {
         do {
             if command == "mcp" {
                 MCPServer.serve()
+                return
+            }
+            if command == "chat" {
+                try performChat(Array(flags.rest.dropFirst()), json: flags.json)
                 return
             }
             let outcome = try perform(
@@ -526,6 +531,9 @@ public enum CLI {
 
         case "doctor":
             let result = Doctor.run(); return CommandOutcome(human: result.lines.joined(separator: "\n"), json: result)
+
+        case "chat":
+            return try performChatCommand(args)
 
         default:
             throw CLIError(commandError: CommandError(code: .unknownCommand, message: "Unknown command: \(command)"))
@@ -1342,6 +1350,129 @@ public enum CLI {
         return CommandOutcome(human: AppControl.humanText(for: status), json: status)
     }
 
+    public static func chatUsageText() -> String {
+        """
+        cosmokit chat — interact with the CosmoKit Agent window
+
+        USAGE
+          cosmokit chat <subcommand> [options]
+
+        SUBCOMMANDS
+          listen    Long-poll for messages from the Agent window and run agent turns
+
+        Run 'cosmokit chat listen --help' for details on listen options.
+        """
+    }
+
+    public static func chatListenUsageText() -> String {
+        """
+        cosmokit chat listen — answer messages from the Agent window automatically
+
+        USAGE
+          cosmokit chat listen [options]
+
+        DESCRIPTION
+          Runs a long-running listener that waits for messages typed in CosmoKit's
+          Agent window. For each message, it runs one Claude turn using your local
+          Claude login and usage, and posts the answer back to the window in a few
+          seconds.
+
+          By default, Claude has read-only access plus simulator control tools.
+          Use --allow-edits to permit file modifications.
+
+        OPTIONS
+          --new                 Start a fresh conversation (ignore saved session)
+          --model <name>        Claude model to use (passed through to claude)
+          --allow-edits         Allow Claude to edit, write, and run bash commands
+          --timeout <seconds>   Turn timeout in seconds (default: 600)
+          --agent <name>        Agent runner to use (default: claude; only claude is supported)
+          --json                Emit machine-readable JSON events
+          -h, --help            Show this help message
+        """
+    }
+
+    public static func parseChatListenOptions(args: [String], isJSON: Bool) throws -> (showHelp: Bool, options: ChatListenOptions) {
+        var options = ChatListenOptions(isJSON: isJSON)
+        var i = 0
+        while i < args.count {
+            let arg = args[i]
+            switch arg {
+            case "-h", "--help", "help":
+                return (true, options)
+            case "--new":
+                options.isNewSession = true
+                i += 1
+            case "--model":
+                guard i + 1 < args.count else {
+                    throw CLIError(commandError: CommandError(code: .usage, message: "--model requires a model name"))
+                }
+                options.model = args[i + 1]
+                i += 2
+            case "--allow-edits":
+                options.allowEdits = true
+                i += 1
+            case "--timeout":
+                guard i + 1 < args.count, let seconds = Double(args[i + 1]), seconds > 0 else {
+                    throw CLIError(commandError: CommandError(code: .usage, message: "--timeout requires a positive number"))
+                }
+                options.timeout = seconds
+                i += 2
+            case "--agent":
+                guard i + 1 < args.count else {
+                    throw CLIError(commandError: CommandError(code: .usage, message: "--agent requires an agent name"))
+                }
+                let agentName = args[i + 1]
+                guard agentName == "claude" else {
+                    throw CLIError(commandError: CommandError(code: .usage, message: "unsupported agent '\(agentName)'. Currently only 'claude' is supported."))
+                }
+                options.agent = agentName
+                i += 2
+            case "--json":
+                options.isJSON = true
+                i += 1
+            default:
+                throw CLIError(commandError: CommandError(code: .usage, message: "unknown option: \(arg)"))
+            }
+        }
+        return (false, options)
+    }
+
+    public static func performChat(_ args: [String], json: Bool) throws {
+        if args.isEmpty || args.first == "--help" || args.first == "-h" || args.first == "help" {
+            print(chatUsageText())
+            return
+        }
+        let subcommand = args[0]
+        if subcommand == "listen" {
+            let listenArgs = Array(args.dropFirst())
+            let (showHelp, options) = try parseChatListenOptions(args: listenArgs, isJSON: json)
+            if showHelp {
+                print(chatListenUsageText())
+                return
+            }
+            try ChatListener.start(options: options)
+            return
+        }
+        throw CLIError(commandError: CommandError(code: .unknownCommand, message: "unknown chat subcommand '\(subcommand)'. Usage: cosmokit chat listen [options]"))
+    }
+
+    public static func performChatCommand(_ args: [String]) throws -> CommandOutcome {
+        if args.isEmpty || args.first == "--help" || args.first == "-h" || args.first == "help" {
+            return CommandOutcome(human: chatUsageText(), json: EmptyPayload())
+        }
+        let subcommand = args[0]
+        if subcommand == "listen" {
+            let listenArgs = Array(args.dropFirst())
+            let (showHelp, options) = try parseChatListenOptions(args: listenArgs, isJSON: false)
+            if showHelp {
+                return CommandOutcome(human: chatListenUsageText(), json: EmptyPayload())
+            }
+            try ChatListener.start(options: options)
+            return CommandOutcome(human: "listener stopped", json: EmptyPayload())
+        }
+        throw CLIError(commandError: CommandError(code: .unknownCommand, message: "unknown chat subcommand '\(subcommand)'. Usage: cosmokit chat listen [options]"))
+    }
+
     private static func parseDefaultsReadArgs(_ args: [String]) throws -> (bundleID: String, device: String?) {
         guard let bundleID = args.first, !bundleID.isEmpty else { throw usage("defaults requires a bundle id") }
         return (bundleID, args.count > 1 ? args[1] : nil)
@@ -1601,6 +1732,7 @@ public enum CLI {
           keychain-reset [name|udid]  Reset the simulator keychain
           proxy-status                Read the system proxy inherited by simulators
           mcp                         Run as an MCP server over stdio (for AI agents)
+          chat listen [options]       Answer messages from the Agent window automatically
           help                        Show this message
 
         OPTIONS

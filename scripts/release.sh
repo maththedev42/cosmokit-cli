@@ -40,6 +40,9 @@ echo "==> Building universal binary (arm64 + x86_64)..."
 swift build -c release --arch arm64 --arch x86_64
 
 BIN_SOURCE=".build/apple/Products/Release/cosmokit"
+if [[ ! -f "$BIN_SOURCE" && -f ".build/out/Products/Release/cosmokit" ]]; then
+    BIN_SOURCE=".build/out/Products/Release/cosmokit"
+fi
 if [[ ! -f "$BIN_SOURCE" ]]; then
     echo "Error: built binary not found at $BIN_SOURCE" >&2
     exit 1

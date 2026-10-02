@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 — 2026-10-02
+
+- Added `cosmokit chat listen`: answers every message in the CosmoKit Agent window automatically by running one Claude turn per message batch.
+- Persists Claude session per chat thread across listener restarts; `--new` starts a fresh conversation.
+- Default read-only tool access plus simulator control; `--allow-edits` permits file changes with Claude.
+- MCP server supports `COSMOKIT_CHAT=off` to avoid recursive chat registration and tool loops.
+
 ## 0.4.2 — 2026-10-01
 
 - `chat_read` no longer errors when nothing arrives: it returns `[]`, and the request timeout margin is now wait + 20 s.

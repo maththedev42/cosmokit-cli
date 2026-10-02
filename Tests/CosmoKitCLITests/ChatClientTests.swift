@@ -113,4 +113,27 @@ final class ChatClientTests: XCTestCase {
             XCTAssertEqual((error as? URLError)?.code, .cannotConnectToHost)
         }
     }
+
+    func testDecodeChatMessageWireWithNumericAndISO8601Dates() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        // 1. Real CHAT-06 response snippet (numeric date, seconds since 2001-01-01)
+        let numericJSON = """
+        [{"id":"4B1C56AC-DCE2-4043-B029-7BA42EE187BE","threadId":"A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D","from":"human","text":"hello","at":812590140.579127,"context":null,"feedbackSeq":null}]
+        """
+        let numericMessages = try decoder.decode([ChatMessageWire].self, from: Data(numericJSON.utf8))
+        XCTAssertEqual(numericMessages.count, 1)
+        XCTAssertEqual(numericMessages[0].text, "hello")
+        XCTAssertEqual(numericMessages[0].at.timeIntervalSinceReferenceDate, 812590140.579127, accuracy: 0.0001)
+
+        // 2. ISO8601 response snippet (standard string date)
+        let isoJSON = """
+        [{"id":"4B1C56AC-DCE2-4043-B029-7BA42EE187BE","threadId":"A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D","from":"human","text":"hello","at":"2026-10-01T23:29:00Z","context":null,"feedbackSeq":null}]
+        """
+        let isoMessages = try decoder.decode([ChatMessageWire].self, from: Data(isoJSON.utf8))
+        XCTAssertEqual(isoMessages.count, 1)
+        XCTAssertEqual(isoMessages[0].text, "hello")
+        XCTAssertEqual(isoMessages[0].at.timeIntervalSinceReferenceDate, 812590140.0, accuracy: 0.0001)
+    }
 }

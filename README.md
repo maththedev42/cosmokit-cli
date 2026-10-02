@@ -27,7 +27,7 @@ Download the universal binary archive from
 `/usr/local`:
 
 ```sh
-sudo tar xzf cosmokit-0.4.0-macos-universal.tar.gz -C /usr/local
+sudo tar xzf cosmokit-0.5.0-macos-universal.tar.gz -C /usr/local
 xattr -d com.apple.quarantine /usr/local/bin/cosmokit
 ```
 
@@ -116,6 +116,7 @@ cosmokit ui screenshot               Capture the current UI as PNG
 cosmokit ui find <text>              Find matching UI elements
 cosmokit doctor                      Check simulator and driver setup
 cosmokit mcp                         Run as an MCP server over stdio
+cosmokit chat listen [options]       Answer messages from the Agent window automatically
 ```
 
 `--output <path>` sets the directory for `capture` and `record`. Use
@@ -419,6 +420,20 @@ thread. Chat text is data and is never executed as a command.
 
 > [!NOTE]
 > App requirements: `cosmokit throttle` and `cosmokit offline` require CosmoKit 4.8.0 or newer running on your Mac. The `chat_*` tools (`chat_read`, `chat_reply`, `chat_status`) require the CosmoKit update that ships the chat window (the next update). Until then, or if CosmoKit is not running, these tools return `appNotRunning` with a hint to open CosmoKit. All other 50+ CLI commands and MCP tools operate independently without needing the CosmoKit macOS app.
+
+### Answer the chat automatically
+
+`cosmokit chat listen` runs a long-running listener in your project directory that answers every message typed into CosmoKit's Agent window:
+
+```sh
+cosmokit chat listen
+```
+
+- It runs one Claude turn per message using your own Claude login and usage.
+- Replies take about 5 to 10 seconds.
+- The default is read-only file access plus simulator control tools.
+- `--allow-edits` lets Claude edit, write, and execute shell commands.
+- The conversation session persists across listener restarts; use `--new` to start fresh.
 
 ### Proxy boundary
 

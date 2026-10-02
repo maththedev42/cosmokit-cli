@@ -1,42 +1,95 @@
 import Foundation
 
-struct ChatMessageWire: Codable {
-    let id: UUID
-    let threadId: UUID
-    let from: String
-    let text: String
-    let at: Date
-    let context: [String: String]?
-    let feedbackSeq: Int?
+public struct ChatMessageWire: Codable {
+    public let id: UUID
+    public let threadId: UUID
+    public let from: String
+    public let text: String
+    public let at: Date
+    public let context: [String: String]?
+    public let feedbackSeq: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, threadId, from, text, at, context, feedbackSeq
+    }
+
+    public init(id: UUID, threadId: UUID, from: String, text: String, at: Date, context: [String: String]? = nil, feedbackSeq: Int? = nil) {
+        self.id = id
+        self.threadId = threadId
+        self.from = from
+        self.text = text
+        self.at = at
+        self.context = context
+        self.feedbackSeq = feedbackSeq
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        threadId = try container.decode(UUID.self, forKey: .threadId)
+        from = try container.decode(String.self, forKey: .from)
+        text = try container.decode(String.self, forKey: .text)
+        context = try container.decodeIfPresent([String: String].self, forKey: .context)
+        feedbackSeq = try container.decodeIfPresent(Int.self, forKey: .feedbackSeq)
+
+        if let date = try? container.decode(Date.self, forKey: .at) {
+            at = date
+        } else if let num = try? container.decode(Double.self, forKey: .at) {
+            at = num > 1_000_000_000 ? Date(timeIntervalSince1970: num) : Date(timeIntervalSinceReferenceDate: num)
+        } else if let str = try? container.decode(String.self, forKey: .at) {
+            let fractionalFormatter = ISO8601DateFormatter()
+            fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = fractionalFormatter.date(from: str) ?? ISO8601DateFormatter().date(from: str) {
+                at = date
+            } else if let num = Double(str) {
+                at = num > 1_000_000_000 ? Date(timeIntervalSince1970: num) : Date(timeIntervalSinceReferenceDate: num)
+            } else {
+                throw DecodingError.dataCorruptedError(forKey: .at, in: container, debugDescription: "Invalid date format: \(str)")
+            }
+        } else {
+            throw DecodingError.dataCorruptedError(forKey: .at, in: container, debugDescription: "Expected Date, Double, or String for 'at'")
+        }
+    }
 }
 
-struct ChatThreadWire: Codable {
-    let id: UUID
-    let agentName: String
-    let clientName: String
-    let workingDir: String?
-    let createdAt: Date
-    let lastSeenAt: Date
-    let isOnline: Bool
-    let unreadCount: Int
+public struct ChatThreadWire: Codable {
+    public let id: UUID
+    public let agentName: String
+    public let clientName: String
+    public let workingDir: String?
+    public let createdAt: Date
+    public let lastSeenAt: Date
+    public let isOnline: Bool
+    public let unreadCount: Int
 }
 
-final class ChatClient {
+public final class ChatClient {
     private let lock = NSLock()
     private var threadID: UUID?
     private var clientName = "mcp-client"
-    private let workingDir = FileManager.default.currentDirectoryPath
+    private let workingDir: String
     private var pollTask: DispatchWorkItem?
     private var onHumanMessage: (([ChatMessageWire]) -> Void)?
     private var mirroredSequences = Set<Int>()
 
-    func setClientName(_ name: String) {
+    public init(clientName: String = "mcp-client", workingDir: String = FileManager.default.currentDirectoryPath) {
+        self.clientName = clientName
+        self.workingDir = workingDir
+    }
+
+    public var currentThreadID: UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        return threadID
+    }
+
+    public func setClientName(_ name: String) {
         lock.lock()
         clientName = name.isEmpty ? "mcp-client" : name
         lock.unlock()
     }
 
-    func registerIfNeeded() throws {
+    public func registerIfNeeded() throws {
         lock.lock()
         if threadID != nil { lock.unlock(); return }
         let name = clientName
@@ -52,7 +105,7 @@ final class ChatClient {
         lock.unlock()
     }
 
-    func start(channel: Bool, onHumanMessage: @escaping ([ChatMessageWire]) -> Void) {
+    public func start(channel: Bool, onHumanMessage: @escaping ([ChatMessageWire]) -> Void) {
         pollTask?.cancel()
         self.onHumanMessage = onHumanMessage
         var task: DispatchWorkItem!
@@ -78,14 +131,14 @@ final class ChatClient {
         DispatchQueue.global(qos: .utility).async(execute: task)
     }
 
-    func stop() { pollTask?.cancel() }
+    public func stop() { pollTask?.cancel() }
 
-    func heartbeat() throws -> Data {
+    public func heartbeat() throws -> Data {
         try registerIfNeeded()
         return try AppControl.request(path: "/v1/chat/agents/\(requiredThreadID())/heartbeat", method: "POST")
     }
 
-    func read(wait: Double) throws -> [ChatMessageWire] {
+    public func read(wait: Double) throws -> [ChatMessageWire] {
         try registerIfNeeded()
         let bounded = min(max(wait, 0), 300)
         let path = "/v1/chat/threads/\(try requiredThreadID())/messages?unread=1&wait=\(String(format: "%.3f", bounded))"
@@ -108,7 +161,7 @@ final class ChatClient {
         return try decoder.decode([ChatMessageWire].self, from: data)
     }
 
-    func reply(_ text: String) throws -> ChatMessageWire {
+    public func reply(_ text: String) throws -> ChatMessageWire {
         guard text.count <= 20_000 else {
             throw CLIError(commandError: CommandError(code: .usage, message: "text must be at most 20,000 characters"))
         }

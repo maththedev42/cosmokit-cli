@@ -49,13 +49,21 @@ public enum AppControl {
             .appendingPathComponent(bundleID, isDirectory: true)
             .appendingPathComponent("Data/Library/Application Support/CosmoKit/agent-control.json", isDirectory: false)
 
-        if fileManager.fileExists(atPath: containerURL.path) {
+        if fileManager.isReadableFile(atPath: containerURL.path) {
             return containerURL
         }
 
         // 3. Fallback non-sandboxed path
         let standardURL = home
             .appendingPathComponent("Library/Application Support/CosmoKit/agent-control.json", isDirectory: false)
+        if fileManager.isReadableFile(atPath: standardURL.path) {
+            return standardURL
+        }
+
+        if fileManager.fileExists(atPath: containerURL.path) {
+            return containerURL
+        }
+
         if fileManager.fileExists(atPath: standardURL.path) {
             return standardURL
         }
